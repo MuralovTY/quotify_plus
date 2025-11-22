@@ -1,0 +1,2428 @@
+from base_plugin import BasePlugin, HookResult, HookStrategy, MethodHook
+from ui.settings import Header, Input, Divider, Switch, Selector, Text
+from ui.bulletin import BulletinHelper
+from ui.alert import AlertDialogBuilder
+from client_utils import send_message, get_send_messages_helper, run_on_queue, get_last_fragment, send_request, get_user_config, RequestCallback, get_messages_controller
+from android_utils import run_on_ui_thread, log
+from java.io import File, FileOutputStream
+from java.util import Locale, ArrayList
+from org.telegram.messenger import ApplicationLoader
+from org.telegram.tgnet import TLRPC
+from hook_utils import find_class
+from android.content import Intent, Context
+from android.net import Uri
+from android.app import Activity
+from android.provider import MediaStore
+from java.lang import Integer, Long
+import os
+import traceback
+import requests
+import threading
+import uuid
+import random
+import math
+import re
+from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageOps, ImageEnhance
+
+__id__ = "quotify_plus"
+__name__ = "[FORK] Quotify+"
+__description__ = "Улучшенная версия Quotify, позволяющая делать стильные цитаты в виде картинок.\n\nКоманды использования:\n.q [данные] - обычная цитата\n.qa [данные] - с кастом аватаркой\n.qb [данные] - с кастом фоном\n.qm [данные] - смешанная (аватарка и фон)\n.fq <текст> | [данные] - обычная фейк цитата\n.fqa <текст> | [данные] - фейк с кастом аватаркой\n.fqb <текст> | [данные] - фейк с кастом фоном\n.fqm <текст> | [данные] - фейк смешанная (аватарка и фон)\n\nКраткая справка:\n<текст> (обязательно): Текст цитаты\n[данные] (необязательно): Юзернейм, номер телефона, ID"
+__author__ = "Raitorinkus & @mur_live (Original authors: @TailedPlugins & @KangelPlugins)"
+__min_version__ = "12.0.1"
+__icon__ = "Kangelcons_by_fStikBot/1"
+__version__ = "b2-1.0.0"
+
+FILE_PICK_REQUEST_CODE = 2040
+PICK_BG_REQUEST_CODE = 2041
+PICK_AVA_REQUEST_CODE = 2042
+FALLBACK_AVATAR_USERNAME = "extreme_demon" # =]
+DEFAULT_FAKE_NAME_SEPARATOR = "|"
+
+def qlog(message):
+    try:
+        log(f"[QuotifyFork] {message}")
+    except Exception:
+        pass
+
+class DebugLogger:
+    logs_dir = "/storage/emulated/0/Download/quotify_fork_logs"
+    logs = []
+
+    @staticmethod
+    def make_log(log):
+        DebugLogger.logs.append(log)
+
+    @staticmethod
+    def save_logs():
+        save_dir = DebugLogger.logs_dir + f"/log-{uuid.uuid4()}.txt"
+        Filesystem.write_file(save_dir, '\n'.join(DebugLogger.logs).encode('utf-8'))
+        return save_dir
+
+class LocalizationManager:
+    language = "en"
+    strings = {
+        "ru": {
+            "FORGOT_TO_REPLY": "⚠️ Ты забыл реплайнуть сообщение!",
+            "TLRPC_USERPHOTOS_ERROR": "⛔ Произошла ошибка при попытке получить аву пользователя!",
+            "TLRPC_GETFILE_ERROR": "⛔ Произошла ошибка при скачивании авы пользователя!",
+            "PLUGIN_ERROR": "⛔ Произошла ошибка в коде плагина",
+            "USERPHOTOS_ERROR": "⛔ Произошла ошибка в коde получения изображения пользователя!",
+            "GETFILE_ERROR": "⛔ Произошла ошибка в коде скачки изображения пользователя!",
+            "ERROR_NO_ACTIVITY": "⛔ Не удалось получить текущий экран!",
+            "ERROR_FILE_PICKER": "⛔ Ошибка при открытии выбора файла!",
+            "ERROR_INVALID_FONT": "⛔ Файл не является шрифтом (.ttf/.otf)!",
+            "ERROR_OPEN_FILE": "⛔ Не удалось открыть файл!",
+            "ERROR_PROCESS_FILE": "⛔ Ошибка при обработке файла!",
+            "FONT_UPLOADED": "✅ Шрифт '{}' успешно загружен!",
+            "SELECT_FONT_FILE": "Выберите файл шрифта",
+            "SETTINGS_TITLE": "Настройки плагина Quotify Fork",
+            "FAKE_QUOTE_EMPTY": "⚠️ Укажи текст после команды",
+            "SETTINGS_LAYOUT": "Стиль цитаты",
+            "SETTINGS_LAYOUT_HORIZONTAL": "Горизонтальная",
+            "SETTINGS_LAYOUT_VERTICAL": "Вертикальная",
+            "SETTINGS_FONT": "Шрифт",
+            "SETTINGS_QUOTE_FONT_SIZE": "Размер шрифта цитаты",
+            "SETTINGS_AUTHOR_FONT_SIZE": "Размер шрифта автора",
+            "SETTINGS_FONT_SIZE_SUB": "Введите размер шрифта (20-60)",
+            "SETTINGS_TEXT_COLOR": "Цвет текста",
+            "TEXT_COLOR_WHITE": "Белый",
+            "TEXT_COLOR_BLACK": "Чёрный",
+            "TEXT_COLOR_CUSTOM": "Пользовательский",
+            "SETTINGS_CUSTOM_TEXT_COLOR": "Пользовательский цвет текста",
+            "SETTINGS_CUSTOM_TEXT_COLOR_SUB": "Введите HEX-код цвета (например, #FFFFFF)",
+            "SETTINGS_RANDOM_BG": "Случайный цвет фона",
+            "SETTINGS_RANDOM_BG_SUB": "Использовать случайный цвет фона, если аватар недоступен",
+            "SETTINGS_CUSTOM_BG_COLOR": "Пользовательский цвет фона",
+            "SETTINGS_CUSTOM_BG_COLOR_SUB": "Введите HEX-код цвета (например, #000000)",
+            "SETTINGS_SHOW_AVATAR": "Показывать аватар",
+            "SETTINGS_SHOW_AVATAR_SUB": "Показывать аватар или заглушку в цитате",
+            "SETTINGS_AVATAR_SIZE": "Размер аватара",
+            "SETTINGS_AVATAR_SIZE_SUB": "Размер аватара в пикселях (50-400)",
+            "SETTINGS_AVATAR_POSITION": "Положение аватара",
+            "SETTINGS_AVATAR_POSITION_LEFT": "Слева",
+            "SETTINGS_AVATAR_POSITION_RIGHT": "Справа",
+            "SETTINGS_AVATAR_SHAPE": "Форма аватара",
+            "SETTINGS_AVATAR_SHAPE_CIRCLE": "Круглая",
+            "SETTINGS_AVATAR_SHAPE_SQUARE": "Квадратная",
+            "SETTINGS_AVATAR_SHAPE_ROUNDED": "Скругленная",
+            "SETTINGS_AVATAR_ROUNDING": "Скругление аватара",
+            "SETTINGS_AVATAR_ROUNDING_SUB": "Радиус скругления (0-100)",
+            "SETTINGS_BG_STYLE": "Стиль фона",
+            "SETTINGS_BG_STYLE_BLUR": "Блюр",
+            "SETTINGS_BG_STYLE_GLASS": "Мокрое стекло",
+            "SETTINGS_BG_STYLE_OLD_TV": "Старый TV",
+            "SETTINGS_BG_STYLE_PIXEL": "Пиксели",
+            "SETTINGS_BG_STYLE_SOLID": "Сплошной цвет",
+            "SETTINGS_BG_STYLE_GRADIENT": "Градиент",
+            "SETTINGS_BG_STYLE_WAVES": "Волны",
+            "SETTINGS_USE_BG_FILTERS": "Фильтры фона",
+            "SETTINGS_USE_BG_FILTERS_SUB": "Применять фильтры к фону аватара",
+            "SETTINGS_BG_FILTER": "Фильтр фона",
+            "SETTINGS_BG_FILTER_NONE": "Без фильтра",
+            "SETTINGS_BG_FILTER_GRAYSCALE": "Чёрно-белый",
+            "SETTINGS_BG_FILTER_SEPIA": "Сепия",
+            "SETTINGS_BG_FILTER_INVERT": "Инверсия",
+            "SETTINGS_BG_FILTER_POSTERIZE": "Постеризация",
+            "SETTINGS_BG_FILTER_COLORIZE": "Окрашивание",
+            "SETTINGS_BG_FILTER_CONTRAST": "Контраст",
+            "SETTINGS_BG_FILTER_EMBOSS": "Тиснение",
+            "UPLOAD_FONT": "Загрузить файл шрифта (.ttf/.otf)",
+            "CURRENT_FONT": "Текущий шрифт: {}",
+            "NONE": "Нет",
+            "SETTINGS_CUSTOM_FONT_FAQ": "Как использовать кастомные шрифты",
+            "SETTINGS_CUSTOM_FONT_URL": "Ссылка на кастом шрифт (.ttf)",
+            "SETTINGS_CUSTOM_FONT_URL_SUB": "Вставьте прямую ссылку на .ttf файл.\nПример: https://example.com/font.ttf",
+            "SETTINGS_FIXED_WIDTH": "Фиксированная ширина",
+            "SETTINGS_GFONTS_QUERY": "Поиск Google Fonts",
+            "SETTINGS_GFONTS_SEARCH": "Найти шрифт в Google Fonts",
+            "GFONTS_NO_RESULTS": "Ничего не найдено",
+            "GFONTS_ONLY_TTF": "Доступны только варианты .ttf/.otf",
+            "GFONTS_ERROR": "Ошибка Google Fonts",
+            "ATTACH_TYPE_1": "[фото]",
+            "ATTACH_TYPE_2": "[голосовое]",
+            "ATTACH_TYPE_3": "[видео]",
+            "ATTACH_TYPE_4": "[гео]",
+            "ATTACH_TYPE_5": "[кружок]",
+            "ATTACH_TYPE_6": "[загрузка]",
+            "ATTACH_TYPE_8": "[гиф]",
+            "ATTACH_TYPE_9": "[файл]",
+            "ATTACH_TYPE_10": "[дата]",
+            "ATTACH_TYPE_11": "[фото]",
+            "ATTACH_TYPE_12": "[контакт]",
+            "ATTACH_TYPE_13": "[стикер]",
+            "ATTACH_TYPE_14": "[музыка]",
+            "ATTACH_TYPE_15": "[анимированный стикер]",
+            "ATTACH_TYPE_16": "[звонок]",
+            "ATTACH_TYPE_17": "[опрос]",
+            "ATTACH_TYPE_18": "[премиум]",
+            "ATTACH_TYPE_20": "[превью]",
+            "ATTACH_TYPE_21": "[предложение фото]",
+            "ATTACH_TYPE_22": "[задний фон]",
+            "ATTACH_TYPE_23": "[история]",
+            "ATTACH_TYPE_24": "[упоминание в истории]",
+            "ATTACH_TYPE_25": "[премиум]",
+            "ATTACH_TYPE_26": "[раздача]",
+            "ATTACH_TYPE_27": "[зашёл в канал]",
+            "ATTACH_TYPE_28": "[результат раздачи]",
+            "ATTACH_TYPE_29": "[платное вложение]",
+            "ATTACH_TYPE_30": "[звёзды]",
+            "IN_REPLY": "[в ответ {0}]",
+            "TLRPC_GETCHANNELS_ERROR": "⛔ Произошла ошибка при получении данных чата!",
+            "SETTINGS_BG_USE_CUSTOM": "Использовать кастом фон",
+            "SETTINGS_PICK_BG": "Выбрать фон из галереи",
+            "SETTINGS_CLEAR_BG": "Сбросить кастом фон",
+            "PICK_BG_ERROR": "Не удалось выбрать изображение",
+            "PICK_BG_SUCCESS": "Фон обновлён",
+            "IMAGE_UPLOADED": "✅ Изображение '{}' успешно загружено!",
+            "CLEAR_BG_SUCCESS": "Фон сброшен",
+            "AVATAR_SETTINGS_TITLE": "Настройка аватарки",
+            "SETTINGS_AVATAR_USE_CUSTOM": "Использовать кастомную аву",
+            "SETTINGS_PICK_AVATAR": "Выбрать аватар из галереи",
+            "SETTINGS_CLEAR_AVATAR": "Сбросить кастомную аватарку",
+            "PICK_AVATAR_SUCCESS": "Аватар обновлён",
+            "CLEAR_AVATAR_SUCCESS": "Аватар сброшен"
+        },
+        "en": {
+            "FORGOT_TO_REPLY": "⚠️ You forgot to reply to message!",
+            "TLRPC_USERPHOTOS_ERROR": "⛔ An error occurred while trying to fetch the user's avatar!",
+            "TLRPC_GETFILE_ERROR": "⛔ An error occurred while downloading avatar!",
+            "PLUGIN_ERROR": "⛔ An error occurred in plugin code!",
+            "USERPHOTOS_ERROR": "⛔ An error occurred in user image retrieval code!",
+            "GETFILE_ERROR": "⛔ An error occurred in user image download code!",
+            "ERROR_NO_ACTIVITY": "⛔ Failed to get current activity!",
+            "ERROR_FILE_PICKER": "⛔ Error opening file picker!",
+            "ERROR_INVALID_FONT": "⛔ File is not a font (.ttf/.otf)!",
+            "ERROR_OPEN_FILE": "⛔ Failed to open file!",
+            "ERROR_PROCESS_FILE": "⛔ Error processing file!",
+            "FONT_UPLOADED": "✅ Font '{}' uploaded successfully!",
+            "SELECT_FONT_FILE": "Select font file",
+            "SETTINGS_TITLE": "Quotify Fork Plugin Settings",
+            "FAKE_QUOTE_EMPTY": "⚠️ Specify text after the command",
+            "SETTINGS_LAYOUT": "Quote style",
+            "SETTINGS_LAYOUT_HORIZONTAL": "Horizontal",
+            "SETTINGS_LAYOUT_VERTICAL": "Vertical",
+            "SETTINGS_FONT": "Font",
+            "SETTINGS_QUOTE_FONT_SIZE": "Quote font size",
+            "SETTINGS_AUTHOR_FONT_SIZE": "Author font size",
+            "SETTINGS_FONT_SIZE_SUB": "Enter font size (20-60)",
+            "SETTINGS_TEXT_COLOR": "Text color",
+            "TEXT_COLOR_WHITE": "White",
+            "TEXT_COLOR_BLACK": "Black",
+            "TEXT_COLOR_CUSTOM": "Custom",
+            "SETTINGS_CUSTOM_TEXT_COLOR": "Custom text color",
+            "SETTINGS_CUSTOM_TEXT_COLOR_SUB": "Enter HEX color code (e.g., #FFFFFF)",
+            "SETTINGS_RANDOM_BG": "Random background color",
+            "SETTINGS_RANDOM_BG_SUB": "Use random background color if avatar is unavailable",
+            "SETTINGS_CUSTOM_BG_COLOR": "Custom background color",
+            "SETTINGS_CUSTOM_BG_COLOR_SUB": "Enter HEX color code (e.g., #000000)",
+            "SETTINGS_SHOW_AVATAR": "Show avatar",
+            "SETTINGS_SHOW_AVATAR_SUB": "Show avatar or placeholder in quote",
+            "SETTINGS_AVATAR_SIZE": "Avatar size",
+            "SETTINGS_AVATAR_SIZE_SUB": "Avatar size in pixels (50-400)",
+            "SETTINGS_AVATAR_POSITION": "Avatar position",
+            "SETTINGS_AVATAR_POSITION_LEFT": "Left",
+            "SETTINGS_AVATAR_POSITION_RIGHT": "Right",
+            "SETTINGS_AVATAR_SHAPE": "Avatar shape",
+            "SETTINGS_AVATAR_SHAPE_CIRCLE": "Circle",
+            "SETTINGS_AVATAR_SHAPE_SQUARE": "Square",
+            "SETTINGS_AVATAR_SHAPE_ROUNDED": "Rounded",
+            "SETTINGS_AVATAR_ROUNDING": "Avatar rounding",
+            "SETTINGS_AVATAR_ROUNDING_SUB": "Rounding radius (0-100)",
+            "SETTINGS_BG_STYLE": "Background style",
+            "SETTINGS_BG_STYLE_BLUR": "Blur",
+            "SETTINGS_BG_STYLE_GLASS": "Wet glass",
+            "SETTINGS_BG_STYLE_OLD_TV": "Old TV",
+            "SETTINGS_BG_STYLE_PIXEL": "Pixel",
+            "SETTINGS_BG_STYLE_SOLID": "Solid color",
+            "SETTINGS_BG_STYLE_GRADIENT": "Gradient",
+            "SETTINGS_BG_STYLE_WAVES": "Waves",
+            "SETTINGS_USE_BG_FILTERS": "Background filters",
+            "SETTINGS_USE_BG_FILTERS_SUB": "Apply filters to avatar background",
+            "SETTINGS_BG_FILTER": "Background filter",
+            "SETTINGS_BG_FILTER_NONE": "No filter",
+            "SETTINGS_BG_FILTER_GRAYSCALE": "Grayscale",
+            "SETTINGS_BG_FILTER_SEPIA": "Sepia",
+            "SETTINGS_BG_FILTER_INVERT": "Invert",
+            "SETTINGS_BG_FILTER_POSTERIZE": "Posterize",
+            "SETTINGS_BG_FILTER_COLORIZE": "Colorize",
+            "SETTINGS_BG_FILTER_CONTRAST": "Contrast",
+            "SETTINGS_BG_FILTER_EMBOSS": "Emboss",
+            "UPLOAD_FONT": "Upload font file (.ttf/.otf)",
+            "CURRENT_FONT": "Current font: {}",
+            "NONE": "None",
+            "SETTINGS_CUSTOM_FONT_FAQ": "How to use custom fonts",
+            "SETTINGS_CUSTOM_FONT_URL": "Custom font URL (.ttf)",
+            "SETTINGS_CUSTOM_FONT_URL_SUB": "Paste a direct link to a .ttf file.\nExample: https://example.com/font.ttf",
+            "SETTINGS_FIXED_WIDTH": "Fixed width",
+            "SETTINGS_GFONTS_QUERY": "Google Fonts search",
+            "SETTINGS_GFONTS_SEARCH": "Search in Google Fonts",
+            "GFONTS_NO_RESULTS": "Nothing found",
+            "GFONTS_ONLY_TTF": "Only .ttf/.otf variants are available",
+            "GFONTS_ERROR": "Google Fonts error",
+            "ATTACH_TYPE_1": "[photo]",
+            "ATTACH_TYPE_2": "[voice message]",
+            "ATTACH_TYPE_3": "[video]",
+            "ATTACH_TYPE_4": "[geo]",
+            "ATTACH_TYPE_5": "[round message]",
+            "ATTACH_TYPE_6": "[upload]",
+            "ATTACH_TYPE_8": "[gif]",
+            "ATTACH_TYPE_9": "[file]",
+            "ATTACH_TYPE_10": "[date]",
+            "ATTACH_TYPE_11": "[photo]",
+            "ATTACH_TYPE_12": "[contact]",
+            "ATTACH_TYPE_13": "[sticker]",
+            "ATTACH_TYPE_14": "[music]",
+            "ATTACH_TYPE_15": "[animated sticker]",
+            "ATTACH_TYPE_16": "[call]",
+            "ATTACH_TYPE_17": "[poll]",
+            "ATTACH_TYPE_18": "[premium]",
+            "ATTACH_TYPE_20": "[preview]",
+            "ATTACH_TYPE_21": "[photo suggestion]",
+            "ATTACH_TYPE_22": "[background]",
+            "ATTACH_TYPE_23": "[story]",
+            "ATTACH_TYPE_24": "[story mention]",
+            "ATTACH_TYPE_25": "[premium]",
+            "ATTACH_TYPE_26": "[giveaway]",
+            "ATTACH_TYPE_27": "[joined channel]",
+            "ATTACH_TYPE_28": "[giveaway result]",
+            "ATTACH_TYPE_29": "[paid attachment]",
+            "ATTACH_TYPE_30": "[stars]",
+            "IN_REPLY": "[in reply to {0}]",
+            "TLRPC_GETCHANNELS_ERROR": "⛔ An error occurred while fetching chat data!",
+            "SETTINGS_BG_USE_CUSTOM": "Use custom background",
+            "SETTINGS_PICK_BG": "Pick background from gallery",
+            "SETTINGS_CLEAR_BG": "Clear custom background",
+            "PICK_BG_ERROR": "Failed to pick image",
+            "PICK_BG_SUCCESS": "Background updated",
+            "IMAGE_UPLOADED": "✅ Image '{}' uploaded successfully!",
+            "CLEAR_BG_SUCCESS": "Background cleared",
+            "AVATAR_SETTINGS_TITLE": "Avatar settings",
+            "SETTINGS_AVATAR_USE_CUSTOM": "Use custom avatar",
+            "SETTINGS_PICK_AVATAR": "Pick avatar from gallery",
+            "SETTINGS_CLEAR_AVATAR": "Clear custom avatar",
+            "PICK_AVATAR_SUCCESS": "Avatar updated",
+            "CLEAR_AVATAR_SUCCESS": "Avatar cleared"
+        }
+    }
+
+    @staticmethod
+    def init():
+        language = Locale.getDefault().getLanguage()
+        LocalizationManager.language = language if language in LocalizationManager.strings else "en"
+
+    @staticmethod
+    def get_string(string, *args):
+        try:
+            locali = LocalizationManager.strings.get(LocalizationManager.language, LocalizationManager.strings["en"]).get(string, string)
+            return locali.format(*args) if args else locali
+        except Exception:
+            return string
+
+class FontManager:
+    fonts = []
+    custom_font_url = ""
+    custom_font_path = None
+    last_custom_url = None
+    
+    @staticmethod
+    def init():
+        FontManager.fonts = [
+            Font("Hack", "https://github.com/source-foundry/Hack/raw/master/build/ttf/Hack-Bold.ttf"),
+            Font("Zpix", "https://github.com/Ar4ikTrirtyFour/windose20/raw/main/fonts/zpix.ttf"),
+            Font("Times New Roman", "https://github.com/misuchiru03/font-times-new-roman/raw/master/Times%20New%20Roman.ttf"),
+            Font("Bounded Regular", "https://github.com/churkinvlad/Bounded/raw/refs/heads/main/OTF/Bounded-Regular.otf"),
+            Font("Кастомный шрифт", None)
+        ]
+        threading.Thread(target=FontManager._download_fonts, daemon=True).start()
+    
+    @staticmethod
+    def _download_fonts():
+        for font in FontManager.fonts:
+            if font.download_uri and not font.exists():
+                try:
+                    font.download()
+                except Exception as e:
+                    qlog(f"Ошибка загрузки шрифта {font.name}: {e}")
+    
+    @staticmethod
+    def get(index, plugin=None):
+        if index == 4:
+            if plugin:
+                custom_url = plugin.get_setting("custom_font_url", "").strip()
+                custom_path = plugin.get_setting("custom_font_path", "").strip()
+                if custom_url:
+                    if FontManager.last_custom_url != custom_url:
+                        temp_dir = Filesystem.get_temp_dir()
+                        font_path = Filesystem.get_absolute_path(temp_dir, "custom_font.ttf")
+                        try:
+                            response = requests.get(custom_url, timeout=15)
+                            with open(font_path, 'wb') as f:
+                                f.write(response.content)
+                            FontManager.last_custom_url = custom_url
+                            FontManager.custom_font_path = font_path
+                        except Exception as e:
+                            qlog(f"Ошибка загрузки кастомного шрифта: {e}")
+                            return FontManager.fonts[0]
+                    return Font("кастом шрифт", None, custom_path=FontManager.custom_font_path)
+                elif custom_path and os.path.exists(custom_path):
+                    return Font("кастом шрифт", None, custom_path=custom_path)
+            return FontManager.fonts[0]
+        if index >= len(FontManager.fonts):
+            return FontManager.fonts[0]
+        return FontManager.fonts[index]
+    
+    @staticmethod
+    def get_fonts_names():
+        return [font.name for font in FontManager.fonts]
+
+class Font:
+    def __init__(self, name, download_uri, custom_path=None):
+        self.name = name
+        self.download_uri = download_uri
+        self.custom_path = custom_path
+    
+    def get_path(self):
+        if self.custom_path and os.path.exists(self.custom_path):
+            return self.custom_path
+        temp_dir = Filesystem.get_temp_dir()
+        if not temp_dir:
+            return "/system/fonts/DroidSans.ttf"
+        fonts_dir = os.path.join(temp_dir, "fonts")
+        if not os.path.exists(fonts_dir):
+            os.makedirs(fonts_dir)
+        file_name = self.name.replace(" ", "_") + ".ttf"
+        return os.path.join(fonts_dir, file_name)
+    
+    def exists(self):
+        return os.path.exists(self.get_path())
+    
+    def download(self):
+        if self.exists() or not self.download_uri:
+            return
+        font_path = self.get_path()
+        try:
+            response = requests.get(self.download_uri, timeout=15)
+            response.raise_for_status()
+            with open(font_path, 'wb') as file:
+                file.write(response.content)
+            qlog(f"Шрифт {self.name} загружен: {font_path}")
+        except Exception as e:
+            qlog(f"Ошибка загрузки {self.name}: {e}")
+
+class Filesystem:
+    @staticmethod
+    def write_file(file_path, content):
+        file_dir = os.path.dirname(file_path)
+        if not os.path.exists(file_dir):
+            os.makedirs(file_dir)
+        with open(file_path, 'wb') as file:
+            file.write(content)
+    
+    @staticmethod
+    def get_absolute_path(dir, file_name):
+        return os.path.join(dir, file_name)
+    
+    @staticmethod
+    def get_temp_dir():
+        try:
+            fixed_dir = ApplicationLoader.getFilesDirFixed()
+            if not fixed_dir:
+                return None
+            temp_dir = os.path.join(fixed_dir.getAbsolutePath(), "quotify_fork")
+            if not os.path.exists(temp_dir):
+                os.makedirs(temp_dir)
+            return temp_dir
+        except Exception:
+            return None
+
+class TelegramUtils:
+    @staticmethod
+    def get_user(user_id):
+        return get_messages_controller().getUser(user_id)
+    
+    @staticmethod 
+    def get_channel(channel_id, callback):
+        req = TLRPC.TL_channels_getChannels()
+        input_channel = get_messages_controller().getInputChannel(channel_id)
+        req.id.add(input_channel)
+        cb = RequestCallback(callback)
+        send_request(req, cb)
+        
+    @staticmethod
+    def get_chat(chat_id, callback):
+        req = TLRPC.TL_messages_getChats()
+        input_chat = get_messages_controller().getInputChat(chat_id)
+        req.id.add(input_chat)
+        cb = RequestCallback(callback)
+        send_request(req, cb)
+        
+    @staticmethod
+    def create_input_location(photo, size):
+        location = TLRPC.TL_inputPhotoFileLocation()
+        location.id = photo.id
+        location.access_hash = photo.access_hash
+        location.file_reference = photo.file_reference
+        location.thumb_size = size.type
+        return location
+        
+    @staticmethod
+    def create_peer_input_location(chat, peer):
+        location = TLRPC.TL_inputPeerPhotoFileLocation()
+        location.big = True
+        location.peer = get_messages_controller().getInputPeer(peer)
+        location.photo_id = chat.photo.photo_id
+        return location
+        
+    @staticmethod
+    def get_chat_thumbnail(chat, peer, callback):
+        req = TLRPC.TL_upload_getFile()
+        cb = RequestCallback(callback)
+        location = TelegramUtils.create_peer_input_location(chat, peer)
+        req.location = location
+        req.offset = 0
+        req.limit = 1024 * 1024
+        send_request(req, cb)
+
+class ReplyerID:
+    def __init__(self, peer):
+        if peer is None:
+            self.channel_id = 0
+            self.chat_id = 0
+            self.user_id = -1
+            self.peer = None
+            return
+        self.channel_id = peer.channel_id
+        self.chat_id = peer.chat_id
+        self.user_id = peer.user_id
+        self.peer = peer
+        
+    def get_replyer_type(self):
+        if self.channel_id != 0:
+            return 2
+        elif self.chat_id != 0:
+            return 1
+        else:
+            return 0
+        
+    def get_id(self):
+        if self.channel_id != 0:
+            return self.channel_id
+        elif self.chat_id != 0:
+            return self.chat_id
+        else:
+            return self.user_id
+
+class Replyer:
+    def __init__(self):
+        self.name = ""
+
+class QuoteManager:
+    def __init__(self, params, font_index, layout_index, fixed_width, plugin, custom_bg_path="", custom_avatar_path="", force_custom_bg=False, force_custom_avatar=False, override_author_name=None, search_query=None):
+        self.params = params
+        self.user = None
+        self.replyer_id = None
+        self.replyer = Replyer()
+        self.font_index = font_index
+        self.layout_index = layout_index
+        self.fixed_width = fixed_width
+        self.plugin = plugin
+        self.override_quote_text = None
+        self.custom_bg_path = custom_bg_path
+        self.custom_avatar_path = custom_avatar_path
+        self.force_custom_bg = force_custom_bg
+        self.force_custom_avatar = force_custom_avatar
+        self.override_author_name = override_author_name
+        self.search_query = search_query
+
+    def generate_quote(self):
+        try:
+            if self.params.replyToMsg is None:
+                BulletinHelper.show_error(LocalizationManager.get_string("FORGOT_TO_REPLY"))
+                return
+
+            if self.search_query:
+                if self._resolve_user_from_query(self.search_query):
+                    return
+                
+                self.override_author_name = self.search_query
+                self.search_query = None
+
+            self.replyer_id = self._init_replyer_id()
+            replyer_type = self.replyer_id.get_replyer_type()
+            if replyer_type == 0:
+                if self.replyer_id.user_id == -1:
+                    return self._create_quote_without_input()
+                user = TelegramUtils.get_user(self.replyer_id.user_id)
+                self.user = user
+                self.replyer.name = self._get_full_replyer_name()
+                self._fetch_user_avatar(user)
+            elif replyer_type == 1:
+                TelegramUtils.get_chat(self.replyer_id.chat_id, self._handle_get_channels_callback)
+            elif replyer_type == 2:
+                TelegramUtils.get_channel(self.replyer_id.channel_id, self._handle_get_channels_callback)
+        except Exception as e:
+            qlog(f"generate_quote error: {e}")
+            BulletinHelper.show_error(LocalizationManager.get_string("PLUGIN_ERROR"))
+
+    def generate_fake_quote(self, text):
+        self.override_quote_text = text
+        if self.search_query:
+            return self._resolve_user_from_query(self.search_query)
+
+        if self.override_author_name is not None:
+            self.replyer.name = self.override_author_name
+            return self._create_quote_without_input()
+        
+        try:
+            reply_obj = getattr(self.params, 'replyToMsg', None)
+            if reply_obj is not None:
+                self.replyer_id = self._init_replyer_id()
+                replyer_type = self.replyer_id.get_replyer_type()
+                if replyer_type == 0:
+                    if self.replyer_id.user_id == -1:
+                        return self._create_quote_without_input()
+                    user = TelegramUtils.get_user(self.replyer_id.user_id)
+                    self.user = user
+                    self.replyer.name = self._get_full_replyer_name()
+                    self._fetch_user_avatar(user)
+                    return
+                elif replyer_type == 1:
+                    TelegramUtils.get_chat(self.replyer_id.chat_id, self._handle_get_channels_callback)
+                    return
+                elif replyer_type == 2:
+                    TelegramUtils.get_channel(self.replyer_id.channel_id, self._handle_get_channels_callback)
+                    return
+
+            user_id = get_user_config().getClientUserId()
+            me = get_messages_controller().getUser(user_id)
+            if me:
+                self.user = me
+                self.replyer.name = self._get_full_replyer_name_from_userobject(me)
+                self._fetch_user_avatar(me)
+            else:
+                self.replyer.name = ""
+                self._create_quote_without_input()
+        except Exception as e:
+            qlog(f"generate_fake_quote error: {e}")
+            BulletinHelper.show_error(LocalizationManager.get_string("PLUGIN_ERROR"))
+
+    def _resolve_user_from_query(self, query):
+        query = query.strip().rstrip(',')
+        try:
+            if query.lower().startswith("tg://user?id="):
+                user_id = int(re.search(r'\d+', query).group())
+                self._resolve_by_id(user_id)
+                return True
+            
+            if query.lower().startswith("id "):
+                user_id = int(query[3:].strip())
+                self._resolve_by_id(user_id)
+                return True
+            
+            if query.startswith("+") and query[1:].isdigit():
+                self._resolve_by_phone(query)
+                return True
+                
+            if query.startswith("@"):
+                self._resolve_by_username(query[1:])
+                return True
+                
+            if query.isdigit():
+                user_id = int(query)
+                self._resolve_by_id(user_id)
+                return True
+            
+            return False
+            
+        except (ValueError, TypeError, AttributeError) as e:
+            qlog(f"Error parsing query '{query}': {e}. Treating as name override.")
+            return False
+
+    def _resolve_by_id(self, user_id):
+        user = TelegramUtils.get_user(user_id)
+        if user:
+            self.user = user
+            self.replyer.name = self._get_full_replyer_name()
+            self._fetch_user_avatar(user)
+        else:
+            qlog(f"User with ID {user_id} not found.")
+            self.replyer.name = self.search_query
+            self._create_quote_without_input()
+
+    def _resolve_by_username(self, username):
+        qlog(f"Resolving username: @{username}")
+        req = TLRPC.TL_contacts_resolveUsername()
+        req.username = username
+        send_request(req, RequestCallback(self._handle_resolve_callback))
+
+    def _resolve_by_phone(self, phone):
+        qlog(f"Resolving phone: {phone}")
+        try:
+            req = TLRPC.TL_contacts_resolvePhone()
+            req.phone = phone
+            send_request(req, RequestCallback(self._handle_resolve_callback))
+        except Exception as e:
+            qlog(f"Failed to create TL_contacts_resolvePhone request: {e}")
+            self.replyer.name = self.search_query
+            self._create_quote_without_input()
+
+    def _handle_resolve_callback(self, response, error):
+        if error or not response:
+            self.replyer.name = self.search_query
+            self._create_quote_without_input()
+            return
+        
+        self.search_query = None 
+
+        if hasattr(response, 'users') and not response.users.isEmpty():
+            user = response.users.get(0)
+            self.user = user
+            self.replyer.name = self._get_full_replyer_name()
+            self._fetch_user_avatar(user)
+        elif hasattr(response, 'chats') and not response.chats.isEmpty():
+            chat = response.chats.get(0)
+            self.replyer.name = chat.title
+            if chat.photo and chat.photo.photo_id != 0 and self.plugin.get_setting("show_avatar", True):
+                TelegramUtils.get_chat_thumbnail(chat, response.peer, self._handle_get_file_callback)
+            else:
+                self._create_quote_without_input()
+        else:
+            self.replyer.name = self.search_query if self.search_query else "Unknown"
+            self._create_quote_without_input()
+
+    def _fetch_user_avatar(self, user):
+        if not self.plugin.get_setting("show_avatar", True) and not self.force_custom_avatar:
+            return self._create_quote_without_input()
+
+        try:
+            if user and user.photo and isinstance(user.photo, TLRPC.TL_userProfilePhoto) and user.photo.photo_id != 0:
+                qlog(f"Attempt 1: Fetching avatar for user {user.id} via user.photo")
+                req = TLRPC.TL_upload_getFile()
+                location = TLRPC.TL_inputPeerPhotoFileLocation()
+                location.big = True
+                location.peer = get_messages_controller().getInputPeer(user.id)
+                location.photo_id = user.photo.photo_id
+                req.location = location
+                req.offset = 0
+                req.limit = 1024 * 1024
+                send_request(req, RequestCallback(lambda r, e: self._handle_direct_avatar_response(r, e, user)))
+                return
+        except Exception as e:
+             qlog(f"Exception initiating direct fetch: {e}")
+        
+        self._fetch_avatar_via_getphotos(user)
+
+    def _handle_direct_avatar_response(self, response, error, user):
+        if not error and response:
+            qlog(f"Attempt 1 succeeded for user {user.id}")
+            self._handle_get_file_callback(response, None)
+        else:
+            if error:
+                qlog(f"Attempt 1 failed for user {user.id}: {error.text}. Proceeding to fallback.")
+            else:
+                qlog(f"Attempt 1 failed for user {user.id} (no response). Proceeding to fallback.")
+            self._fetch_avatar_via_getphotos(user)
+
+    def _fetch_avatar_via_getphotos(self, user):
+        try:
+            qlog(f"Attempt 2: Fetching avatar for user {user.id} via getUserPhotos")
+            req = TLRPC.TL_photos_getUserPhotos()
+            input_user = get_messages_controller().getInputUser(user.id)
+            if not input_user:
+                qlog(f"Could not get InputUser for {user.id}. Proceeding to service fallback.")
+                if not self._try_fetch_username_avatar(FALLBACK_AVATAR_USERNAME):
+                    self._create_quote_without_input(skip_service_fallback=True)
+                return
+            req.user_id = input_user
+            req.limit = 1
+            req.offset = 0
+            req.max_id = 0
+            send_request(req, RequestCallback(self._handle_user_photos_callback))
+        except Exception as e:
+            qlog(f"Exception initiating getUserPhotos fetch: {e}. Proceeding to service fallback.")
+            if not self._try_fetch_username_avatar(FALLBACK_AVATAR_USERNAME):
+                self._create_quote_without_input(skip_service_fallback=True)
+
+    def _fetch_avatar_via_web(self, user):
+        try:
+            username = getattr(user, 'username', None)
+            if not username:
+                qlog("Web fallback failed: No username available.")
+                return self._create_quote_without_input()
+
+            qlog(f"Attempt 3: Fetching avatar for @{username} via web scraping")
+            url = f"https://t.me/{username}"
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+            
+            html_response = requests.get(url, headers=headers, timeout=10)
+            html_response.raise_for_status()
+            
+            avatar_url = None
+            match = re.search(r'<meta property="og:image" content="([^"]+)"', html_response.text)
+            if match:
+                avatar_url = match.group(1)
+            else:
+                match = re.search(r'<meta name="twitter:image" content="([^"]+)"', html_response.text)
+                if match:
+                    avatar_url = match.group(1)
+                else:
+                    match = re.search(r'<img class="tgme_page_photo_image" src="([^"]+)"', html_response.text)
+                    if match:
+                        avatar_url = match.group(1)
+            
+            if not avatar_url:
+                qlog("Web fallback failed: Could not find avatar URL in HTML.")
+                return self._create_quote_without_input()
+            
+            qlog(f"Found avatar URL: {avatar_url}")
+            avatar_response = requests.get(avatar_url, headers=headers, timeout=10)
+            avatar_response.raise_for_status()
+
+            tmp_file = f"img_web_{user.id}.jpg"
+            temp_dir = Filesystem.get_temp_dir()
+            file_path = Filesystem.get_absolute_path(temp_dir, tmp_file)
+            
+            Filesystem.write_file(file_path, avatar_response.content)
+            qlog(f"Web fallback succeeded. Image saved to {file_path}")
+            
+            self._create_and_send_image(
+                image_path=file_path,
+                output_path=file_path,
+                author=self._get_author(),
+                quote=self._get_quote_message(),
+                layout_vertical=(self.layout_index == 1)
+            )
+        except Exception as e:
+            qlog(f"Web fallback failed with exception: {e}")
+            self._create_quote_without_input()
+
+    def _handle_get_channels_callback(self, response, error):
+        if error:
+            return self._create_quote_without_input()
+        if response and response.chats and response.chats.size() > 0:
+            chat = response.chats.get(0)
+            self.replyer.name = chat.title
+            if chat.photo.photo_id == 0 or not self.plugin.get_setting("show_avatar", True):
+                return self._create_quote_without_input()
+            TelegramUtils.get_chat_thumbnail(chat, self.replyer_id.peer, self._handle_get_file_callback)
+
+    def _format_file_metadata(self, document, label_format):
+        full_name = None
+        name_part = "file"
+        ext_part = ""
+        file_size_str = ""
+        
+        try:
+            if hasattr(document, 'attributes') and document.attributes:
+                for i in range(document.attributes.size()):
+                    attr = document.attributes.get(i)
+                    if hasattr(attr, 'file_name'):
+                        fn = attr.file_name
+                        if fn:
+                            full_name = str(fn)
+                            break
+                    elif hasattr(attr, 'fileName'):
+                        fn = attr.fileName
+                        if fn:
+                            full_name = str(fn)
+                            break
+    
+            if full_name:
+                if '.' in full_name:
+                    parts = full_name.rsplit('.', 1)
+                    name_part = parts[0]
+                    ext_part = parts[1]
+                else:
+                    name_part = full_name
+                    ext_part = ""
+            
+            size_val = getattr(document, 'size', 0)
+            if size_val > 0:
+                if size_val < 1024:
+                    file_size_str = f"{size_val}b"
+                elif size_val < 1024 * 1024:
+                    file_size_str = f"{round(size_val / 1024, 2)}kb"
+                else:
+                    file_size_str = f"{round(size_val / (1024 * 1024), 2)}mb"
+                    
+        except Exception as e:
+            qlog(f"_format_file_metadata error: {e}")
+            pass
+    
+        result = label_format.replace("{name}", name_part).replace("{ext}", ext_part)
+        
+        if not ext_part and "." in result:
+            result = result.replace(".", "")
+    
+        if "{size}" in result:
+            if file_size_str:
+                result = result.replace("{size}", file_size_str)
+            else:
+                result = result.replace("{size}", "")
+        
+        return result.replace("  ", " ").strip()
+
+    def _get_quote_message(self):
+        if self.override_quote_text is not None:
+            return self.override_quote_text
+        
+        raw_message = self._get_replyer()
+        message = raw_message.message if isinstance(raw_message.message, str) else ""
+        
+        try:
+            if self.plugin.get_setting("enable_attach_labels", True):
+                reply_obj = self.params.replyToMsg
+                
+                real_msg = getattr(reply_obj, 'messageOwner', reply_obj)
+                
+                message_type = getattr(reply_obj, 'type', 999)
+                
+                document = None
+                
+                media = getattr(real_msg, 'media', None)
+                if media:
+                    document = getattr(media, 'document', None)
+                    if not document:
+                        webpage = getattr(media, 'webpage', None)
+                        if webpage:
+                            document = getattr(webpage, 'document', None)
+
+                if document:
+                    is_special_type = False
+                    if hasattr(document, 'attributes'):
+                        for i in range(document.attributes.size()):
+                            attr = document.attributes.get(i)
+                            if isinstance(attr, TLRPC.TL_documentAttributeAudio):
+                                if getattr(attr, 'voice', False):
+                                    message_type = 2
+                                else:
+                                    message_type = 14
+                                is_special_type = True
+                                break
+                            elif isinstance(attr, TLRPC.TL_documentAttributeVideo):
+                                if getattr(attr, 'round_message', False):
+                                    message_type = 5
+                                else:
+                                    message_type = 3 # Присваиваем тип [видео]
+                                is_special_type = True
+                                break
+                    
+                    if not is_special_type:
+                        message_type = 9
+
+                if message_type == 9:
+                    raw_label = self.plugin.get_setting("attach_label_9", "[{name} {size}]")
+                    if document:
+                        label = self._format_file_metadata(document, raw_label)
+                    else:
+                        label = "[файл]"
+                elif message_type in range(1, 31):
+                    label = self.plugin.get_attach_label(message_type)
+                else:
+                    label = ""
+
+                if label:
+                    if message:
+                        message = str(label) + "\n" + message
+                    else:
+                        message = str(label)
+            return message
+        except Exception:
+            return message
+
+    def _init_replyer_id(self):
+        replyer = self._get_replyer()
+        replyer_peer = replyer.from_id
+        if replyer.fwd_from is not None:
+            replyer_peer = replyer.fwd_from.from_id
+            if replyer.fwd_from.from_id is None:
+                self.replyer.name = replyer.fwd_from.saved_from_name
+        return ReplyerID(replyer_peer)
+
+    def _get_full_replyer_name(self):
+        use_contact_data = self.plugin.get_setting("use_contact_data", True)
+        
+        first_name = self.user.first_name or ""
+        last_name = self.user.last_name or ""
+        
+        if not use_contact_data and self.user.username:
+            if not first_name and not last_name:
+                return self.user.username
+            
+        return " ".join([first_name, last_name]).strip()
+
+    def _get_full_replyer_name(self):
+        first_name = self.user.first_name or ""
+        last_name = self.user.last_name or ""
+        return " ".join([first_name, last_name]).strip()
+
+    def _get_replyer(self):
+        return self.params.replyToMsg.messageOwner
+
+    def _get_replyer_id(self):
+        return self.replyer_id.get_id()
+
+    def _handle_user_photos_callback(self, response, error):
+        if error or not response or not hasattr(response, 'photos') or response.photos.size() == 0:
+            if error: qlog(f"getUserPhotos failed with error: {error.text}. Proceeding to service fallback.")
+            else: qlog("getUserPhotos returned no photos. Proceeding to service fallback.")
+            if not self._try_fetch_username_avatar(FALLBACK_AVATAR_USERNAME):
+                self._create_quote_without_input(skip_service_fallback=True)
+            return
+        try:
+            photo = response.photos.get(0)
+            best_size = None
+            for size in photo.sizes:
+                if isinstance(size, (TLRPC.TL_photoSize, TLRPC.TL_photoSizeProgressive)):
+                     if best_size is None or size.size > best_size.size:
+                        best_size = size
+            if not best_size:
+                qlog("No suitable photo size found. Proceeding to web fallback.")
+                return self._fetch_avatar_via_web(self.user)
+            req = TLRPC.TL_upload_getFile()
+            cb = RequestCallback(self._handle_get_file_callback)
+            input_file = TelegramUtils.create_input_location(photo, best_size)
+            req.location = input_file
+            req.offset = 0
+            req.limit = 1024 * 1024
+            send_request(req, cb)
+        except Exception as e:
+            qlog(f"Exception in _handle_user_photos_callback: {e}. Proceeding to web fallback.")
+            return self._fetch_avatar_via_web(self.user)
+
+    def _try_fetch_username_avatar(self, username):
+        try:
+            req = TLRPC.TL_contacts_resolveUsername()
+            req.username = username
+            send_request(req, RequestCallback(self._resolve_username_callback))
+            qlog(f"Dispatched resolveUsername for @{username} as fallback")
+            return True
+        except Exception:
+            return False
+
+    def _resolve_username_callback(self, response, error):
+        try:
+            if error or not response:
+                return self._create_quote_without_input(skip_service_fallback=True)
+            try:
+                if hasattr(response, "users") and response.users is not None and response.users.size() > 0:
+                    u = response.users.get(0)
+                    input_user = get_messages_controller().getInputUser(u.id)
+                    if input_user is not None:
+                        req = TLRPC.TL_photos_getUserPhotos()
+                        req.user_id = input_user
+                        req.limit = 1
+                        send_request(req, RequestCallback(self._fallback_user_photos_callback))
+                        return
+            except Exception:
+                pass
+            try:
+                if hasattr(response, "chats") and response.chats is not None and response.chats.size() > 0:
+                    chat = response.chats.get(0)
+                    if chat.photo is not None and chat.photo.photo_id != 0:
+                        TelegramUtils.get_chat_thumbnail(chat, response.peer, self._handle_get_file_callback)
+                        return
+            except Exception:
+                pass
+            self._create_quote_without_input(skip_service_fallback=True)
+        except Exception:
+            self._create_quote_without_input(skip_service_fallback=True)
+
+    def _fallback_user_photos_callback(self, response, error):
+        try:
+            if not error and response:
+                try:
+                    if response.photos is not None and response.photos.size() > 0:
+                        photo = response.photos.get(0)
+                        best_size = None
+                        for size in photo.sizes:
+                            if isinstance(size, (TLRPC.TL_photoSize, TLRPC.TL_photoSizeProgressive)):
+                                 if best_size is None or size.size > best_size.size:
+                                    best_size = size
+                        if not best_size:
+                           return self._create_quote_without_input(skip_service_fallback=True)
+                        req = TLRPC.TL_upload_getFile()
+                        cb = RequestCallback(self._handle_get_file_callback)
+                        input_file = TelegramUtils.create_input_location(photo, best_size)
+                        req.location = input_file
+                        req.offset = 0
+                        req.limit = 1024 * 1024
+                        send_request(req, cb)
+                        return
+                except Exception:
+                    pass
+            self._create_quote_without_input(skip_service_fallback=True)
+        except Exception:
+            self._create_quote_without_input(skip_service_fallback=True)
+
+    def _create_quote_without_input(self, skip_service_fallback=False):
+        try:
+            use_custom_avatar = self.plugin.get_setting("avatar_use_custom", False)
+            
+            if use_custom_avatar and not self.force_custom_avatar and self.custom_avatar_path and os.path.exists(self.custom_avatar_path):
+                 self._create_and_send_image(
+                    image_path=self.custom_avatar_path,
+                    output_path=Filesystem.get_absolute_path(Filesystem.get_temp_dir(), f"tmp_custom_{uuid.uuid4()}.jpg"),
+                    author=self._get_author(),
+                    quote=self._get_quote_message(),
+                    layout_vertical=(self.layout_index == 1)
+                 )
+                 return
+
+            user_or_chat_id = -1
+            if self.replyer_id:
+                user_or_chat_id = self._get_replyer_id()
+            elif self.user:
+                user_or_chat_id = self.user.id
+            else:
+                user_or_chat_id = uuid.uuid4()
+
+            tmp_file = f"tmp_{user_or_chat_id}.jpg"
+            temp_dir = Filesystem.get_temp_dir()
+            file_path = Filesystem.get_absolute_path(temp_dir, tmp_file)
+            
+            self._create_and_send_image(
+                output_path=file_path,
+                author=self._get_author(),
+                quote=self._get_quote_message(),
+                layout_vertical=(self.layout_index == 1)
+            )
+        except Exception as e:
+            qlog(f"_create_quote_without_input error: {e}")
+            BulletinHelper.show_error(LocalizationManager.get_string("PLUGIN_ERROR"))
+
+    def _handle_get_file_callback(self, response, error):
+        if error:
+            if self.user:
+                qlog(f"TL_upload_getFile failed with error: {error.text}. Attempting web fallback.")
+                return self._fetch_avatar_via_web(self.user)
+            else:
+                qlog(f"TL_upload_getFile failed for a non-user entity: {error.text}")
+                return self._create_quote_without_input(skip_service_fallback=True)
+        try:
+            buffer = response.bytes.buffer
+            buffer.rewind()
+            length = buffer.remaining()
+            py_bytes = bytes([buffer.get() & 0xFF for _ in range(length)])
+            
+            user_or_chat_id = -1
+            if self.replyer_id:
+                user_or_chat_id = self._get_replyer_id()
+            elif self.user:
+                user_or_chat_id = self.user.id
+            else:
+                user_or_chat_id = uuid.uuid4()
+            tmp_file = f"img_{user_or_chat_id}.jpg"
+            
+            temp_dir = Filesystem.get_temp_dir()
+            file_path = Filesystem.get_absolute_path(temp_dir, tmp_file)
+            Filesystem.write_file(file_path, py_bytes)
+            self._create_and_send_image(
+                image_path=file_path,
+                output_path=file_path,
+                author=self._get_author(),
+                quote=self._get_quote_message(),
+                layout_vertical=(self.layout_index == 1)
+            )
+        except Exception:
+            return self._create_quote_without_input(skip_service_fallback=True)
+
+    def _create_color_background(self, width, height, use_random_bg, custom_bg_color):
+        if use_random_bg:
+            bg_color = tuple(random.randint(100, 255) for _ in range(3))
+        else:
+            bg_color = self.plugin._parse_hex_color(custom_bg_color, (0, 0, 0))
+        return Image.new("RGB", (width, height), bg_color)
+        
+    def _apply_bg_style_beta(self, image, width, height, style):
+        try:
+            if style == 5:
+                use_random_bg = self.plugin.get_setting("use_random_bg", True)
+                custom_bg_color = self.plugin.get_setting("custom_bg_color", "#000000")
+                if use_random_bg:
+                    bg_color = tuple(random.randint(100, 255) for _ in range(3))
+                else:
+                    bg_color = self.plugin._parse_hex_color(custom_bg_color, (0, 0, 0))
+                image = Image.new("RGB", (width, height), bg_color)
+                result = image
+            else:
+                img_w, img_h = image.size
+                scale = max(width / img_w, height / img_h)
+                new_w, new_h = int(img_w * scale), int(img_h * scale)
+                resized = image.resize((new_w, new_h), Image.LANCZOS)
+                left = (new_w - width) // 2
+                top = (new_h - height) // 2
+                cropped = resized.crop((left, top, left + width, top + height))
+                
+                if style == 0:
+                    result = cropped.convert("RGB")
+                elif style == 1:
+                    radius = int(self.plugin.get_setting("bg_blur_radius", "60"))
+                    result = cropped.filter(ImageFilter.GaussianBlur(radius))
+                elif style == 2:
+                    radius = int(self.plugin.get_setting("bg_glass_blur_radius", "60"))
+                    opacity = int(self.plugin.get_setting("bg_glass_opacity", "80"))
+                    result = cropped.filter(ImageFilter.GaussianBlur(radius))
+                    overlay = Image.new("RGBA", (width, height), (255, 255, 255, opacity))
+                    result = Image.alpha_composite(result.convert("RGBA"), overlay).convert("RGB")
+                elif style == 3:
+                    noise_intensity = int(self.plugin.get_setting("bg_tv_noise_intensity", "60"))
+                    result = cropped.filter(ImageFilter.GaussianBlur(5)).convert("RGBA")
+                    
+                    small_w = width // 4
+                    small_h = height // 4
+                    noise_bytes = os.urandom(small_w * small_h)
+                    noise = Image.frombytes("L", (small_w, small_h), noise_bytes)
+                    noise = noise.resize((width, height), Image.NEAREST)
+                    
+                    noise_overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+                    mask = noise.point(lambda p: int(p * (noise_intensity / 255.0) * 0.5))
+                    noise_overlay.putalpha(mask)
+                    
+                    result = Image.alpha_composite(result, noise_overlay).convert("RGB")
+                elif style == 4:
+                    pixel_size = int(self.plugin.get_setting("bg_pixel_size", "20"))
+                    pixel_size = max(1, pixel_size)
+                    small = cropped.resize((width // pixel_size, height // pixel_size), Image.NEAREST)
+                    result = small.resize((width, height), Image.NEAREST)
+                elif style == 6:
+                    color1_hex = self.plugin.get_setting("bg_gradient_color1", "#FF8040")
+                    color2_hex = self.plugin.get_setting("bg_gradient_color2", "#8040FF")
+                    color1 = self.plugin._parse_hex_color(color1_hex, (255, 128, 64))
+                    color2 = self.plugin._parse_hex_color(color2_hex, (128, 64, 255))
+                    result = Image.new("RGB", (width, height))
+                    draw = ImageDraw.Draw(result)
+                    for i in range(width):
+                        ratio = i / width
+                        r = int(color1[0] * (1 - ratio) + color2[0] * ratio)
+                        g = int(color1[1] * (1 - ratio) + color2[1] * ratio)
+                        b = int(color1[2] * (1 - ratio) + color2[2] * ratio)
+                        draw.line([(i, 0), (i, height)], fill=(r, g, b))
+                elif style == 7:
+                    amplitude = float(self.plugin.get_setting("bg_waves_amplitude", "5"))
+                    frequency = float(self.plugin.get_setting("bg_waves_frequency", "0.1"))
+                    result = cropped.copy()
+                    for y in range(height):
+                        shift = int(amplitude * math.sin(y * frequency))
+                        region = result.crop((0, y, width, y + 1))
+                        result.paste(region, (shift, y))
+                    result = result.filter(ImageFilter.GaussianBlur(3))
+                else:
+                    result = cropped.filter(ImageFilter.GaussianBlur(20))
+            
+            dimming_value = int(self.plugin.get_setting("bg_dimming", "70"))
+            if dimming_value <= 0:
+                dimming_value = 1
+            dimming_value = min(100, dimming_value)
+            
+            alpha = int(dimming_value / 100 * 255)
+            if alpha > 0:
+                overlay = Image.new("RGBA", (width, height), (0, 0, 0, alpha))
+                if result.mode != 'RGBA':
+                    result = result.convert('RGBA')
+                result = Image.alpha_composite(result, overlay).convert("RGB")
+            return result
+        except (ValueError, TypeError) as e:
+            qlog(f"BG style value error: {e}")
+            return Image.new("RGB", (width, height), (0, 0, 0))
+        except Exception as e:
+            qlog(f"BG style error: {e}")
+            traceback.print_exc()
+            return Image.new("RGB", (width, height), (0, 0, 0))
+
+    def _apply_bg_filter_beta(self, image, filter_type):
+        try:
+            if filter_type == 0:
+                return image
+            if image.mode != 'RGB':
+                image = image.convert('RGB')
+            if filter_type == 1:
+                return ImageOps.grayscale(image).convert('RGB')
+            elif filter_type == 2:
+                grayscale = ImageOps.grayscale(image)
+                sepia = Image.new('RGB', grayscale.size)
+                pixels = grayscale.load()
+                sepia_pixels = sepia.load()
+                for x in range(grayscale.size[0]):
+                    for y in range(grayscale.size[1]):
+                        gray = pixels[x, y]
+                        r = min(255, int(gray * 1.1))
+                        g = min(255, int(gray * 0.9))
+                        b = min(255, int(gray * 0.7))
+                        sepia_pixels[x, y] = (r, g, b)
+                return sepia
+            elif filter_type == 3:
+                return ImageOps.invert(image)
+            elif filter_type == 4:
+                levels = int(self.plugin.get_setting("filter_posterize_levels", "4"))
+                levels = max(2, min(8, levels))
+                posterized = image.copy()
+                pixels = posterized.load()
+                for x in range(posterized.size[0]):
+                    for y in range(posterized.size[1]):
+                        r, g, b = pixels[x, y]
+                        r = int(round(r / 255.0 * (levels - 1))) * int(255 / (levels - 1))
+                        g = int(round(g / 255.0 * (levels - 1))) * int(255 / (levels - 1))
+                        b = int(round(b / 255.0 * (levels - 1))) * int(255 / (levels - 1))
+                        pixels[x, y] = (r, g, b)
+                return posterized
+            elif filter_type == 5:
+                black_hex = self.plugin.get_setting("filter_colorize_black", "#000000")
+                white_hex = self.plugin.get_setting("filter_colorize_white", "#FFD700")
+                black_color = self.plugin._parse_hex_color(black_hex, (0,0,0))
+                white_color = self.plugin._parse_hex_color(white_hex, (255,215,0))
+                grayscale = ImageOps.grayscale(image)
+                return ImageOps.colorize(grayscale, black=black_color, white=white_color).convert('RGB')
+            elif filter_type == 6:
+                factor = float(self.plugin.get_setting("filter_contrast_factor", "2.0"))
+                enhancer = ImageEnhance.Contrast(image)
+                return enhancer.enhance(factor)
+            elif filter_type == 7:
+                return image.filter(ImageFilter.EMBOSS)
+            else:
+                return image
+        except (ValueError, TypeError) as e:
+            qlog(f"BG filter value error: {e}")
+            return image
+        except Exception as e:
+            qlog(f"BG filter error: {e}")
+            return image
+
+    def _create_and_send_image(self, image_path=None, output_path="quote.jpg", author="", quote="", layout_vertical=False):
+        font_index = self.plugin.get_setting("font", 0)
+        selected_font = FontManager.get(font_index, self.plugin)
+        font_path = selected_font.get_path()
+        try:
+            quote_font_size = int(self.plugin.get_setting("quote_font_size", "48"))
+            author_font_size = int(self.plugin.get_setting("author_font_size", "36"))
+            line_spacing = int(self.plugin.get_setting("line_spacing", "12"))
+        except (ValueError, TypeError):
+            quote_font_size = 48
+            author_font_size = 36
+            line_spacing = 12
+
+        text_color_index = self.plugin.get_setting("text_color", 0)
+        if text_color_index == 0:
+            text_color = (255, 255, 255)
+            author_color = (180, 180, 180)
+        elif text_color_index == 1:
+            text_color = (0, 0, 0)
+            author_color = (50, 50, 50)
+        else:
+            custom_color_hex = self.plugin.get_setting("custom_text_color", "#FFFFFF")
+            text_color = self.plugin._parse_hex_color(custom_color_hex, (255, 255, 255))
+            author_color = tuple(min(255, c + 50) for c in text_color)
+
+        show_avatar = self.plugin.get_setting("show_avatar", True)
+        try:
+            avatar_size = int(self.plugin.get_setting("avatar_size", "400"))
+            avatar_size = max(50, min(400, avatar_size))
+        except (ValueError, TypeError):
+            avatar_size = 400
+        avatar_position = self.plugin.get_setting("avatar_position", 0)
+        avatar_shape = self.plugin.get_setting("avatar_shape", 0)
+        try:
+            avatar_rounding = int(self.plugin.get_setting("avatar_rounding", "80"))
+        except (ValueError, TypeError):
+            avatar_rounding = 80
+        bg_style = self.plugin.get_setting("bg_style", 0)
+        bg_filter = self.plugin.get_setting("bg_filter", 0)
+        use_random_bg = self.plugin.get_setting("use_random_bg", True)
+        custom_bg_color = self.plugin.get_setting("custom_bg_color", "#000000")
+
+        try:
+            quote_font = ImageFont.truetype(font_path, quote_font_size)
+            author_font = ImageFont.truetype(font_path, author_font_size)
+        except Exception as e:
+            qlog(f"Font error: {e}")
+            try:
+                quote_font = ImageFont.load_default()
+                author_font = ImageFont.load_default()
+            except:
+                return
+
+        temp_img = Image.new("RGB", (1, 1))
+        temp_draw = ImageDraw.Draw(temp_img)
+        
+        safe_author = str(author) if author is not None else ""
+        author_text = f"— {safe_author.strip()}"
+
+        if layout_vertical:
+            canvas_width = 1200
+            padding = 50
+            max_text_width = canvas_width - padding * 2
+            wrapped_quote = self._wrap_text(temp_draw, quote, quote_font, max_text_width)
+            quote_bbox = temp_draw.multiline_textbbox((0, 0), wrapped_quote, font=quote_font, spacing=line_spacing)
+            quote_height = quote_bbox[3] - quote_bbox[1]
+            wrapped_author = self._wrap_text(temp_draw, author_text, author_font, max_text_width)
+            author_bbox = temp_draw.multiline_textbbox((0, 0), wrapped_author, font=author_font, spacing=line_spacing)
+            author_height = author_bbox[3] - author_bbox[1]
+            if show_avatar:
+                canvas_height = avatar_size + padding + quote_height + 30 + author_height + padding * 2
+            else:
+                canvas_height = quote_height + 30 + author_height + padding * 2
+            canvas_height = max(600, int(canvas_height))
+        else:
+            canvas_width = 1200
+            padding = 50
+            max_text_width = canvas_width - padding * 2
+            if show_avatar:
+                max_text_width -= (avatar_size + padding)
+            
+            wrapped_quote = self._wrap_text(temp_draw, quote, quote_font, max_text_width)
+            quote_bbox = temp_draw.multiline_textbbox((0, 0), wrapped_quote, font=quote_font, spacing=line_spacing)
+            quote_height = quote_bbox[3] - quote_bbox[1]
+            quote_width = quote_bbox[2] - quote_bbox[0]
+
+            wrapped_author = self._wrap_text(temp_draw, author_text, author_font, max_text_width)
+            author_bbox = temp_draw.multiline_textbbox((0, 0), wrapped_author, font=author_font, spacing=line_spacing)
+            author_height = author_bbox[3] - author_bbox[1]
+            author_width = author_bbox[2] - author_bbox[0]
+
+            total_block_height = quote_height + 10 + author_height
+            content_height = total_block_height
+            if show_avatar:
+                content_height = max(total_block_height, avatar_size)
+            
+            canvas_height = int(content_height + padding * 2)
+            canvas_height = max(600, canvas_height)
+
+        bg_source_path = None
+        avatar_source_path = None
+        if not self.force_custom_bg and not self.force_custom_avatar:
+            if image_path and os.path.exists(image_path):
+                bg_source_path = image_path
+                if show_avatar:
+                    avatar_source_path = image_path
+        elif self.force_custom_bg and not self.force_custom_avatar:
+            if self.custom_bg_path and os.path.exists(self.custom_bg_path):
+                bg_source_path = self.custom_bg_path
+            if image_path and os.path.exists(image_path) and show_avatar:
+                avatar_source_path = image_path
+        elif not self.force_custom_bg and self.force_custom_avatar:
+            if image_path and os.path.exists(image_path):
+                bg_source_path = image_path
+            elif self.custom_bg_path and os.path.exists(self.custom_bg_path):
+                bg_source_path = self.custom_bg_path
+            if self.custom_avatar_path and os.path.exists(self.custom_avatar_path) and show_avatar:
+                avatar_source_path = self.custom_avatar_path
+        else:
+            if self.custom_bg_path and os.path.exists(self.custom_bg_path):
+                bg_source_path = self.custom_bg_path
+            if self.custom_avatar_path and os.path.exists(self.custom_avatar_path) and show_avatar:
+                avatar_source_path = self.custom_avatar_path
+
+        if bg_source_path:
+            try:
+                orig_img = Image.open(bg_source_path).convert("RGBA")
+                canvas = self._apply_bg_style_beta(orig_img, canvas_width, canvas_height, bg_style)
+                if bg_filter > 0:
+                    canvas = self._apply_bg_filter_beta(canvas, bg_filter)
+            except Exception as e:
+                qlog(f"Background error: {e}")
+                canvas = self._create_color_background(canvas_width, canvas_height, use_random_bg, custom_bg_color)
+        else:
+            canvas = self._create_color_background(canvas_width, canvas_height, use_random_bg, custom_bg_color)
+
+        avatar_img = None
+        if show_avatar:
+            if avatar_source_path and os.path.exists(avatar_source_path):
+                try:
+                    avatar_img = Image.open(avatar_source_path).convert("RGBA")
+                    avatar_img = avatar_img.resize((avatar_size, avatar_size), Image.LANCZOS)
+                    mask = Image.new("L", (avatar_size, avatar_size), 0)
+                    mask_draw = ImageDraw.Draw(mask)
+                    if avatar_shape == 0:
+                        mask_draw.ellipse((0, 0, avatar_size, avatar_size), fill=255)
+                    elif avatar_shape == 1:
+                        mask_draw.rectangle((0, 0, avatar_size, avatar_size), fill=255)
+                    else:
+                        mask_draw.rounded_rectangle((0, 0, avatar_size, avatar_size), radius=avatar_rounding, fill=255)
+                    avatar_img.putalpha(mask)
+                except Exception as e:
+                    qlog(f"Avatar processing error: {e}")
+                    avatar_img = None
+            if not avatar_img:
+                avatar_img = Image.new("RGBA", (avatar_size, avatar_size), (0, 0, 0, 0))
+                avatar_draw = ImageDraw.Draw(avatar_img)
+                circle_color = tuple(random.randint(100, 255) for _ in range(3))
+                mask = Image.new("L", (avatar_size, avatar_size), 0)
+                mask_draw = ImageDraw.Draw(mask)
+                if avatar_shape == 0:
+                    mask_draw.ellipse((0, 0, avatar_size, avatar_size), fill=255)
+                    avatar_draw.ellipse((0, 0, avatar_size, avatar_size), fill=circle_color)
+                elif avatar_shape == 1:
+                    mask_draw.rectangle((0, 0, avatar_size, avatar_size), fill=255)
+                    avatar_draw.rectangle((0, 0, avatar_size, avatar_size), fill=circle_color)
+                else:
+                    mask_draw.rounded_rectangle((0, 0, avatar_size, avatar_size), radius=avatar_rounding, fill=255)
+                    avatar_draw.rounded_rectangle((0, 0, avatar_size, avatar_size), radius=avatar_rounding, fill=circle_color)
+                try:
+                    letter_font = ImageFont.truetype(font_path, int(avatar_size * 0.4))
+                    base_author = safe_author.strip()
+                    letter = base_author[0].upper() if base_author else "?"
+                    bbox = avatar_draw.textbbox((0, 0), letter, font=letter_font)
+                    w, h = bbox[2] - bbox[0], bbox[3] - bbox[1]
+                    avatar_draw.text(((avatar_size - w) // 2, (avatar_size - h) // 2), letter, font=letter_font, fill=(255, 255, 255))
+                except:
+                    pass
+                avatar_img.putalpha(mask)
+
+        draw = ImageDraw.Draw(canvas)
+
+        if layout_vertical:
+            current_y = padding
+            if show_avatar and avatar_img:
+                img_x = (canvas_width - avatar_size) // 2
+                canvas.paste(avatar_img, (img_x, current_y), avatar_img)
+                current_y += avatar_size + padding
+            
+            current_y -= 8
+
+            quote_bbox = draw.multiline_textbbox((0, 0), wrapped_quote, font=quote_font, spacing=line_spacing)
+            quote_width = quote_bbox[2] - quote_bbox[0]
+            quote_height = quote_bbox[3] - quote_bbox[1]
+            text_x = (canvas_width - quote_width) // 2
+            draw.multiline_text((text_x, current_y), wrapped_quote, font=quote_font, fill=text_color, align="center", spacing=line_spacing)
+            current_y += quote_height + 20
+
+            author_bbox = draw.multiline_textbbox((0, 0), wrapped_author, font=author_font, spacing=line_spacing)
+            author_width = author_bbox[2] - author_bbox[0]
+            author_x = (canvas_width - author_width) // 2
+            draw.multiline_text((author_x, current_y), wrapped_author, font=author_font, fill=author_color, align="center", spacing=line_spacing)
+        else:
+            text_align = "left"
+            if show_avatar and avatar_img:
+                if avatar_position == 0:
+                    img_x = padding
+                    text_x = img_x + avatar_size + padding
+                else:
+                    img_x = canvas_width - avatar_size - padding
+                    text_x = padding
+                    text_align = "right"
+                img_y = (canvas_height - avatar_size) // 2
+                canvas.paste(avatar_img, (img_x, img_y), avatar_img)
+            else:
+                text_x = padding
+
+            total_block_height = quote_height + 10 + author_height
+            text_y = (canvas_height - total_block_height) // 2
+            
+            author_x = text_x
+            if text_align == "right":
+                right_boundary = img_x - padding
+                text_x = right_boundary - quote_width
+                author_x = right_boundary - author_width
+
+            draw.multiline_text((text_x, text_y), wrapped_quote, font=quote_font, fill=text_color, spacing=line_spacing, align=text_align)
+            author_y = text_y + quote_height + 10
+            draw.multiline_text((author_x, author_y), wrapped_author, font=author_font, fill=author_color, spacing=line_spacing, align=text_align)
+
+        try:
+            canvas.save(output_path, quality=95, optimize=True)
+            self._send_quote(output_path, len(quote))
+        except Exception as e:
+            qlog(f"Save error: {e}")
+            BulletinHelper.show_error(LocalizationManager.get_string("PLUGIN_ERROR"))
+
+    def _get_text_width(self, draw, text, font):
+        try:
+            bbox = draw.textbbox((0, 0), text, font=font)
+            return bbox[2] - bbox[0]
+        except AttributeError:
+            w, _ = draw.textsize(text, font=font)
+            return w
+
+    def _break_long_word(self, draw, word, font, max_width):
+        parts = []
+        current = ""
+        for ch in word:
+            test = current + ch
+            if self._get_text_width(draw, test, font) <= max_width:
+                current = test
+            else:
+                if current:
+                    parts.append(current)
+                current = ch
+        if current:
+            parts.append(current)
+        return parts
+
+    def _wrap_text(self, draw, text, font, max_width):
+        lines = []
+        paragraphs = text.split('\n')
+        for p in paragraphs:
+            words = p.split(' ')
+            if len(words) == 0:
+                lines.append('')
+                continue
+            current = ""
+            for word in words:
+                candidate = word if current == "" else current + " " + word
+                if self._get_text_width(draw, candidate, font) <= max_width:
+                    current = candidate
+                else:
+                    if current:
+                        lines.append(current)
+                    if self._get_text_width(draw, word, font) > max_width:
+                        chunks = self._break_long_word(draw, word, font, max_width)
+                        if chunks:
+                            lines.extend(chunks[:-1])
+                            current = chunks[-1]
+                        else:
+                            current = word
+                    else:
+                        current = word
+            lines.append(current)
+        return '\n'.join(lines)
+
+    def _send_quote(self, output_path, text_len=0):
+        try:
+            threshold = int(self.plugin.get_setting("file_send_threshold", "1234"))
+            is_file = text_len >= threshold
+            
+            params = {
+                "peer": self.params.peer,
+                "replyToMsg": self.params.replyToMsg,
+                "replyToTopMsg": self.params.replyToTopMsg
+            }
+            
+            if is_file:
+                params["document"] = output_path
+                params["force_document"] = True
+                params["message"] = ""
+            else:
+                send_helper = get_send_messages_helper()
+                photo = send_helper.generatePhotoSizes(output_path, None)
+                params["photo"] = photo
+                params["message"] = None
+
+            send_message(params)
+        except Exception as e:
+            qlog(f"Send error: {e}")
+            BulletinHelper.show_error(LocalizationManager.get_string("PLUGIN_ERROR"))
+
+    def _get_author(self):
+        try:
+            if self.override_author_name:
+                name = str(self.override_author_name)
+                if name.strip():
+                    return name.strip()
+
+            if self.replyer.name:
+                name = str(self.replyer.name)
+                if name.strip():
+                    return name.strip()
+
+            if self.search_query:
+                name = str(self.search_query)
+                if name.strip():
+                    return name.strip()
+        except Exception:
+            pass
+            
+        default = self.plugin.get_setting("unknown_author_label", "None")
+        return str(default) if default is not None else "None"
+
+class QuotifyForkPlugin(BasePlugin):
+    class ActivityResultHook(MethodHook):
+        def __init__(self, plugin_instance):
+            self.plugin = plugin_instance
+
+        def before_hooked_method(self, param):
+            request_code = param.args[0]
+            result_code = param.args[1]
+            data = param.args[2]
+            if result_code != Activity.RESULT_OK or data is None or data.getData() is None:
+                if request_code in (FILE_PICK_REQUEST_CODE, PICK_BG_REQUEST_CODE, PICK_AVA_REQUEST_CODE) and self.plugin._activity_hook:
+                    self.plugin._activity_hook.unhook()
+                    self.plugin._activity_hook = None
+                return
+            uri_string = data.getData().toString()
+            if request_code == FILE_PICK_REQUEST_CODE:
+                param.setResult(None)
+                qlog("Intercepted font picker result!")
+                run_on_ui_thread(lambda: self.plugin._handle_file_picker_result(uri_string, 'font'))
+            elif request_code == PICK_BG_REQUEST_CODE:
+                param.setResult(None)
+                qlog("Intercepted BG picker result!")
+                run_on_ui_thread(lambda: self.plugin._handle_file_picker_result(uri_string, 'bg'))
+            elif request_code == PICK_AVA_REQUEST_CODE:
+                param.setResult(None)
+                qlog("Intercepted Avatar picker result!")
+                run_on_ui_thread(lambda: self.plugin._handle_file_picker_result(uri_string, 'avatar'))
+            if request_code in (FILE_PICK_REQUEST_CODE, PICK_BG_REQUEST_CODE, PICK_AVA_REQUEST_CODE) and self.plugin._activity_hook:
+                self.plugin._activity_hook.unhook()
+                self.plugin._activity_hook = None
+                qlog(f"onActivityResult hook removed for request {request_code}.")
+
+    def __init__(self):
+        super().__init__()
+        self._temp_dir_path = None
+        self._activity_hook = None
+
+    def on_plugin_load(self):
+        try:
+            self._prepare_directories()
+            LocalizationManager.init()
+            FontManager.init()
+            self.add_on_send_message_hook()
+            qlog("Plugin loaded successfully")
+        except Exception as e:
+            qlog(f"Load error: {e}")
+
+    def _prepare_directories(self):
+        try:
+            base_dir = ApplicationLoader.getFilesDirFixed()
+            temp_dir = File(base_dir, "quotify_fork")
+            if not temp_dir.exists():
+                temp_dir.mkdirs()
+            self._temp_dir_path = temp_dir.getAbsolutePath()
+            fonts_dir = File(temp_dir, "fonts")
+            if not fonts_dir.exists():
+                fonts_dir.mkdirs()
+            images_dir = File(temp_dir, "images")
+            if not images_dir.exists():
+                images_dir.mkdirs()
+        except Exception as e:
+            qlog(f"Directory error: {e}")
+
+    def _parse_hex_color(self, hex_string, default_color):
+        try:
+            hex_string = hex_string.lstrip('#')
+            if len(hex_string) == 6:
+                return tuple(int(hex_string[i:i+2], 16) for i in (0, 2, 4))
+        except (ValueError, TypeError):
+            pass
+        return default_color
+
+    def _show_help_dialog(self, view=None):
+        title = "Quotify - Быстрая справка"
+        text = """
+🎨 Quotify Fork - создание стильных цитат из сообщений
+
+📝 КОМАНДЫ:
+
+Цитаты (требуют реплая):
+.q [ник] - обычная цитата
+.qb [ник] - с кастом фоном
+.qa [ник] - с кастом аватаром
+.qm [ник] - с кастом фоном и аватаром
+
+Фейковые цитаты:
+.fq <текст> | [ник] - фейк-цитата
+.fqb <текст> | [ник] - с кастом фоном
+.fqa <текст> | [ник] - с кастом аватаром
+.fqm <текст> | [ник] - с кастомфоном и аватаром
+
+А также в настойках можно сделать кастом фон/аву/шрифт и т.д.""".strip()
+        close_button = "Закрыть"
+        fragment = get_last_fragment()
+        if not fragment:
+            qlog("Cannot show dialog, no current fragment.")
+            return
+        activity = fragment.getParentActivity()
+        if not activity:
+            qlog("Cannot show dialog, no parent activity.")
+            return
+        builder = AlertDialogBuilder(activity)
+        builder.set_title(title)
+        builder.set_message(text)
+        builder.set_positive_button(close_button, lambda bld, which: bld.dismiss())
+        builder.show()
+
+    def _show_font_faq_alert(self, view=None):
+        title = "🎨 Как выбрать кастом шрифты"
+        text = (
+            "📝 Как добавить кастом шрифт?\n\n"
+            "1️⃣ Выберите 'кастом шрифт' в селекторе шрифтов\n\n"
+            "2️⃣ Варианты загрузки:\n"
+            "• Вставьте ссылку на .ttf файл\n"
+            "• Или загрузите файл с устройства\n\n"
+            "🔗 Примеры ссылок:\n"
+            "• https://example.com/font.ttf\n"
+            "• https://fonts.gstatic.com/s/roboto/v30/font.ttf\n\n"
+            "💡 В КОНЦЕ ОБЯЗАТЕЛЬНО ДОЛЖНО БЫТЬ .ttf\n\n"
+            "3️⃣ Сохраните настройки и создайте цитату (.q)\n\n"
+            "⚡ Плагин автоматически скачает и будет использовать шрифт!\n\n"
+            "🚨 ВАЖНО! ПРИ ПЕРВОМ ИСПОЛЬЗОВАНИИ/СМЕНЕ ШРИФТА КАРТОЧКА БУДЕТ СОЗДАВАТЬСЯ ДОЛЬШЕ\n\n"
+            "💻 Рекомендуется загружать шрифты на Github\n\n"
+            "🌐 Где искать шрифты (с прямыми ссылками):\n"
+            "• https://fontsaddict.com\n"
+            "• https://en.bestfonts.pro\n"
+        )
+        close_button = "Понятно"
+        fragment = get_last_fragment()
+        ctx = fragment.getContext() if fragment else ApplicationLoader.applicationContext
+        builder = AlertDialogBuilder(ctx, AlertDialogBuilder.ALERT_TYPE_MESSAGE)
+        builder.set_title(title)
+        builder.set_message(text)
+        builder.set_positive_button(close_button, lambda d, w: None)
+        builder.set_cancelable(True)
+        builder.set_canceled_on_touch_outside(True)
+        builder.show()
+
+    def _show_quotify_guide(self, view=None):
+        quote_cmd = self.get_setting("q_default", ".q")
+        quote_cmd_bg = self.get_setting("q_force_bg", ".qb")
+        quote_cmd_ava = self.get_setting("q_force_ava", ".qa")
+        quote_cmd_both = self.get_setting("q_force_both", ".qm")
+        fake_cmd = self.get_setting("fq_default", ".fq")
+        fake_cmd_bg = self.get_setting("fq_force_bg", ".fqb")
+        fake_cmd_ava = self.get_setting("fq_force_ava", ".fqa")
+        fake_cmd_both = self.get_setting("fq_force_both", ".fqm")
+        sep = self.get_setting("fake_name_separator", DEFAULT_FAKE_NAME_SEPARATOR)
+        title = "Quotify - Подробная инструкция"
+        text = f"""
+🎨 Quotify Fork - создание стильных цитат из сообщений
+
+📝 ОСНОВНЫЕ КОМАНДЫ:
+
+Цитаты из сообщений (требуют реплая):
+{quote_cmd} никнейм — обычная цитата (аватар и фон из профиля пользователя)
+{quote_cmd_bg} никнейм — аватар из профиля + кастом фон из настроек
+{quote_cmd_ava} никнейм — кастом аватар из настроек + фон из профиля пользователя
+{quote_cmd_both} никнейм — кастомные аватар и фон из настроек
+
+Фейковые цитаты (без реплая, с произвольным текстом):
+{fake_cmd} Текст {sep} никнейм — обычная фейк цитата (аватар и фон из вашего профиля)
+{fake_cmd_bg} Текст {sep} никнейм — аватар из вашего профиля + кастом фон
+{fake_cmd_ava} Текст {sep} никнейм — кастом аватар + фон из вашего профиля
+{fake_cmd_both} Текст {sep} никнейм — кастомные аватар и фон
+
+🖼️ ВАЖНО ПРО АВАТАРКИ:
+• Используйте квадратные изображения (1:1)
+• Рекомендуемый размер: 400x400 пикселей
+
+⚙️ НАСТРОЙКИ:
+• Метки вложений: задайте свои подписи по типам
+• Стиль фона: добавлен пункт «Без стиля»
+• Фильтры: используйте «Без фильтра» вместо переключателя
+        """
+        fragment = get_last_fragment()
+        ctx = fragment.getContext() if fragment else ApplicationLoader.applicationContext
+        builder = AlertDialogBuilder(ctx, AlertDialogBuilder.ALERT_TYPE_MESSAGE)
+        builder.set_title(title)
+        builder.set_message(text.strip())
+        builder.set_positive_button("Понятно", lambda d, w: None)
+        builder.set_cancelable(True)
+        builder.set_canceled_on_touch_outside(True)
+        builder.show()
+
+    def create_settings(self):
+        return [
+            Text(text="Команды", icon="input_bot1", create_sub_fragment=self.create_command_settings),
+            Text(text="Макет и цвета", icon="msg_theme", create_sub_fragment=self.create_appearance_settings),
+            Text(text="Аватар", icon="msg_contacts_ny_remix", create_sub_fragment=self.create_avatar_settings),
+            Text(text="Шрифты", icon="msg_photo_text_regular", create_sub_fragment=self.create_font_settings),
+            Text(text="Фон и фильтры", icon="msg_photo_blur", create_sub_fragment=self.create_background_settings),
+            Text(text="Метки вложений", icon="msg_log", create_sub_fragment=self.create_labels_settings),
+            Text(text="Статистика", icon="msg_stats", create_sub_fragment=self.create_statistics_settings),
+            Text(text="Справка", icon="msg_info", create_sub_fragment=self.create_help_settings),
+        ]
+
+    def create_command_settings(self):
+        return [
+            Header("Обычные цитаты"),
+            Input(key="q_default", text="Обычная цитата:", default=".q", subtext="Команда для создания цитаты", icon="menu_select_quote"),
+            Input(key="q_force_bg", text="Кастом фон:", default=".qb", subtext="Использует фон из настроек", icon="msg_photos"),
+            Input(key="q_force_ava", text="Кастом аватар:", default=".qa", subtext="Использует аватар из настроек", icon="msg_contacts"),
+            Input(key="q_force_both", text="Кастом фон и аватар:", default=".qm", subtext="Использует фон и аватар из настроек", icon="menu_feature_reactions"),
+            Divider(),
+            Header("Фейковые цитаты"),
+            Input(key="fq_default", text="фейк цитата:", default=".fq", subtext="Команда для создания фейк-цитаты", icon="msg_contacts_name"),
+            Input(key="fq_force_bg", text="Кастом фон с фейком:", default=".fqb", subtext="Использует фон из настроек", icon="msg_photos"),
+            Input(key="fq_force_ava", text="Кастом аватар с фейком:", default=".fqa", subtext="Использует аватар из настроек", icon="msg_contacts"),
+            Input(key="fq_force_both", text="Кастом фон и аватар фейком:", default=".fqm", subtext="Использует фон и аватар из настроек", icon="menu_feature_reactions"),
+            Divider(),
+            Input(key="fake_name_separator", text="Разделитель текста/ника", default=DEFAULT_FAKE_NAME_SEPARATOR, subtext="Например: .fq текст | данные", icon="msg_search"),
+        ]
+
+    def create_appearance_settings(self):
+        return [
+            Header("Настройки внешнего вида"),
+            Selector(key="layout", text="Стиль цитаты", default=1, items=["Горизонтальная","Вертикальная"], icon="msg_contacts_name", on_change=self.refresh_settings),
+            Switch(key="fixed_width", text="Фиксированная ширина", default=True, subtext="Делает все символы одинаковой ширины", icon="msg_fave"),
+            Selector(key="text_color", text="Цвет текста", default=0, items=["Белый","Чёрный","Пользовательский"], icon="menu_edit_appearance"),
+            Input(key="custom_text_color", text="Пользовательский цвет текста", default="#FFFFFF", subtext="Введите HEX-код цвета (например, #FFFFFF)", icon="msg_colors"),
+            Input(key="quote_font_size", text="Размер шрифта цитаты", default="48", subtext="Введите размер шрифта (20-60)", icon="menu_select_quote"),
+            Input(key="author_font_size", text="Размер шрифта автора", default="36", subtext="Введите размер шрифта (20-60)", icon="msg_contacts"),
+            Input(key="line_spacing", text="Межстрочный интервал", default="12", subtext="Расстояние между строками в пикселях", icon="msg_list"),
+        ]
+
+    def create_avatar_settings(self):
+        settings = [
+            Header("Настройки аватара"),
+            Switch(key="show_avatar", text="Показывать аватар", default=True, subtext="Показывать аватар или заглушку в цитате", icon="msg_contacts"),
+            Input(key="avatar_size", text="Размер аватара", default="400", subtext="Размер аватара в пикселях (50-400)", icon="msg_photo_crop"),
+        ]
+        if self.get_setting("layout", 1) == 0:
+            settings.append(Selector(key="avatar_position", text="Положение аватара", default=0, items=["Слева","Справа"], icon="msg_forward_replace"))
+        
+        settings.append(Selector(key="avatar_shape", text="Форма аватара", default=0, items=["Круглая","Квадратная","Скругленная"], icon="msg_sticker", on_change=self.refresh_settings))
+        
+        if self.get_setting("avatar_shape", 0) == 2:
+            settings.append(Input(key="avatar_rounding", text="Скругление аватара", default="80", subtext="Радиус скругления (0-100)", icon="msg_status_edit"))
+            
+        settings.extend([
+            Divider(),
+            Header("кастом аватар"),
+            Switch(key="avatar_use_custom", text="Использовать кастомную аву", default=self.get_setting("avatar_use_custom", False), subtext="Используется, если аватар у пользователя отсутствует, или принудительно через команды.", icon="msg_photos"),
+            Text(text="Выбрать аватар из галереи", icon="msg_gallery", on_click=self._open_gallery_for_avatar),
+            Text(text="Сбросить кастомную аватарку", icon="msg_delete", on_click=self._clear_custom_avatar),
+        ])
+        return settings
+
+    def create_font_settings(self):
+        custom_font_path = self.get_setting("custom_font_path", "")
+        current_font_text = f"Текущий шрифт: {os.path.basename(custom_font_path)}" if custom_font_path else "Шрифт не выбран"
+        return [
+            Header("Основной шрифт"),
+            Selector(key="font", text="Шрифт", default=0, items=FontManager.get_fonts_names(), icon="msg_photo_text_regular"),
+            Text(text="Как выбрать кастом шрифты", icon="msg_info", on_click=self._show_font_faq_alert),
+            Divider(),
+            Header("Поиск Google Fonts"),
+            Input(key="gfonts_query", text="Поиск Google Fonts", default=self.get_setting("gfonts_query", ""), icon="ic_send"),
+            Text(text="Найти шрифт в Google Fonts", icon="msg_search", on_click=self._search_google_fonts_and_pick),
+            Divider(),
+            Header("Загрузка своего шрифта"),
+            Input(key="custom_font_url", text="Ссылка на кастом шрифт (.ttf)", default="", subtext="Вставьте прямую ссылку на .ttf файл.\nПример: https://example.com/font.ttf", icon="msg_photo_text_framed3"),
+            Text(text="Загрузить файл шрифта (.ttf/.otf)", icon="files_folder_solar", accent=True, on_click=self._launch_font_file_picker),
+            Text(text=current_font_text, icon="msg_log"),
+        ]
+
+    def create_background_settings(self):
+        settings = [
+            Header("Настройки фона"),
+            Selector(
+                key="bg_style",
+                text="Стиль фона",
+                default=0,
+                items=["Без стиля", "Блюр", "Мокрое стекло", "Старый TV", "Пиксели", "Сплошной цвет", "Градиент", "Волны"],
+                icon="msg_theme",
+                on_change=self.refresh_settings
+            )
+        ]
+
+        current_style = self.get_setting("bg_style", 0)
+
+        if current_style == 1:
+            settings.append(Input(key="bg_blur_radius", text="Размытие", default="60", subtext="Сила эффекта в % (0-100)", icon="msg_photo_blur"))
+        elif current_style == 2:
+            settings.append(Input(key="bg_glass_blur_radius", text="Размытие", default="60", subtext="Сила эффекта в % (0-100)", icon="msg_photo_blur"))
+            settings.append(Input(key="bg_glass_opacity", text="Прозрачность наложения", default="80", subtext="Значение от 0 до 255", icon="msg_photo_flip"))
+        elif current_style == 3:
+            settings.append(Input(key="bg_tv_noise_intensity", text="Интенсивность шума", default="60", subtext="Сила эффекта в % (0-100)", icon="msg_voicechat"))
+        elif current_style == 4:
+            settings.append(Input(key="bg_pixel_size", text="Размер пикселя", default="20", subtext="Размер пикселя (например, 20)", icon="msg_spoiler"))
+        elif current_style == 6:
+             settings.append(Input(key="bg_gradient_color1", text="Цвет 1", default="#FF8040", subtext="Начальный цвет градиента (HEX)", icon="msg_palette"))
+             settings.append(Input(key="bg_gradient_color2", text="Цвет 2", default="#8040FF", subtext="Конечный цвет градиента (HEX)", icon="msg_palette"))
+        elif current_style == 7:
+            settings.append(Input(key="bg_waves_amplitude", text="Амплитуда", default="5", subtext="Сила искажения", icon="msg_status_edit_solar"))
+            settings.append(Input(key="bg_waves_frequency", text="Частота", default="0.1", subtext="Частота волн", icon="msg_stats"))
+
+        settings.extend([
+            Divider(),
+            Selector(
+                key="bg_filter",
+                text="Фильтр фона",
+                default=0,
+                items=["Без фильтра", "Чёрно-белый", "Сепия", "Инверсия", "Постеризация", "Окрашивание", "Контраст", "Тиснение"],
+                icon="msg_reactions",
+                on_change=self.refresh_settings
+            )
+        ])
+        
+        current_filter = self.get_setting("bg_filter", 0)
+
+        if current_filter == 4:
+            settings.append(Input(key="filter_posterize_levels", text="Количество уровней", default="4", subtext="Количество цветовых уровней (2-8)", icon="msg_fave"))
+        elif current_filter == 5:
+            settings.append(Input(key="filter_colorize_black", text="Цвет для чёрного", default="#000000", subtext="HEX цвет", icon="msg_palette"))
+            settings.append(Input(key="filter_colorize_white", text="Цвет для белого", default="#FFD700", subtext="HEX цвет", icon="msg_palette"))
+        elif current_filter == 6:
+            settings.append(Input(key="filter_contrast_factor", text="Сила контраста", default="2.0", subtext="Например, 1.5 или 2.0", icon="menu_feature_cover"))
+
+        settings.extend([
+            Divider(),
+            Input(key="bg_dimming", text="Затемнение фона", default="70", subtext="Значение от 0 (нет) до 100 (черный)", icon="msg_photo_flip"),
+            Switch(key="use_random_bg", text="Случайный цвет фона", default=True, subtext="Использовать случайный цвет фона, если аватар недоступен", icon="player_new_shuffle"),
+            Input(key="custom_bg_color", text="Пользовательский цвет фона", default="#000000", subtext="Введите HEX-код цвета (например, #000000)", icon="msg_colors"),
+            Divider(),
+            Header("кастом фон"),
+            Switch(key="bg_use_custom", text="Использовать кастом фон", default=self.get_setting("bg_use_custom", False), subtext="Принудительно заменяет фон. Может быть вызван командами, даже если переключатель выключен.", icon="msg_photos"),
+            Text(text="Выбрать фон из галереи", icon="msg_gallery", on_click=self._open_gallery_for_bg),
+            Text(text="Сбросить кастом фон", icon="msg_delete", on_click=self._clear_custom_bg),
+        ])
+        return settings
+
+    def create_labels_settings(self):
+        return [
+            Header("Основные"),
+            Switch(key="enable_attach_labels", text="Включить метки", default=True, subtext="Добавлять подписи типа [фото] к тексту", icon="menu_tag_rename"),
+            Input(key="unknown_author_label", text="Неизвестный никнейм", default="None", icon="msg_contacts_hw_solar"),
+            Input(key="attach_label_none", text="Неизвестное вложение", default="[вложение]", subtext="Используется, если тип не распознан", icon="msg_photo_flip"),
+            Input(key="attach_label_9", text="Файл", default="[{name}.{ext} {size}]", subtext="Поддерживает {name}, {size}, {ext}", icon="msg_sendfile"),
+            Divider(),
+            Header("Для задротов"),
+            Input(key="attach_label_1", text="Фото", default="[фото]", icon="msg_photos"),
+            Input(key="attach_label_2", text="Голосовое", default="[голосовое]", icon="input_mic"),
+            Input(key="attach_label_3", text="Видео", default="[видео]", icon="menu_videocall"),
+            Input(key="attach_label_5", text="Кружок", default="[кружок]", icon="input_video_solar"),
+            Input(key="attach_label_14", text="Музыка", default="[музыка]", icon="msg_tone_on"),
+            Input(key="attach_label_15", text="Анимированный стикер", default="[анимированный стикер]", icon="input_smile"),
+            Input(key="attach_label_16", text="Звонок", default="[звонок]", icon="msg_calls"),
+            Input(key="attach_label_17", text="Опрос", default="[опрос]", icon="msg_topics"),
+            Input(key="attach_label_25", text="Премиум подарок", default="[премиум]", icon="msg_gift_premium"),
+            Input(key="attach_label_13", text="Стикер", default="[стикер]", icon="msg_sticker"),
+            Input(key="attach_label_4", text="Геопозиция", default="[гео]", icon="msg_location"),
+            Input(key="attach_label_8", text="GIF", default="[гиф]", icon="msg_gif"),
+            Input(key="attach_label_10", text="Дата", default="[дата]", icon="msg_calendar"),
+            Input(key="attach_label_12", text="Контакт", default="[контакт]", icon="msg_contacts"),
+        ]
+
+    def create_help_settings(self):
+        return [
+            Header("Справка по использованию"),
+            Text(text="Быстрая справка", icon="msg_info", on_click=self._show_help_dialog),
+            Text(text="Подробная инструкция", icon="msg_help", on_click=self._show_quotify_guide),
+            Text(text="Помощь по шрифтам", icon="msg_photo_text_regular", on_click=self._show_font_faq_alert),
+        ]
+    
+    def create_statistics_settings(self):
+        total = self.get_setting("quotify_stats_total", 0)
+        normal = self.get_setting("quotify_stats_normal", 0)
+        fake = self.get_setting("quotify_stats_fake", 0)
+        return [
+            Header("Статистика использования"),
+            Text(text=f"Всего создано цитат: {total}", icon="msg_fave"),
+            Text(text=f"Обычные цитаты: {normal}", icon="menu_select_quote"),
+            Text(text=f"Фейковые цитаты: {fake}", icon="msg_contacts_name"),
+            Divider(),
+            Text(text="Подробная статистика по командам", icon="msg_list", create_sub_fragment=self._create_detailed_stats_fragment),
+            Divider(),
+            Text(text="Сбросить статистику", icon="msg_delete", red=True, on_click=self._confirm_reset_statistics)
+        ]
+
+    def _create_detailed_stats_fragment(self):
+        cmd_keys = {
+            "q_default": "stats_cmd_q", "q_force_bg": "stats_cmd_qf", "q_force_ava": "stats_cmd_qc", "q_force_both": "stats_cmd_qm",
+            "fq_default": "stats_cmd_fq", "fq_force_bg": "stats_cmd_fqf", "fq_force_ava": "stats_cmd_fqc", "fq_force_both": "stats_cmd_fqm"
+        }
+        cmd_defaults = {
+            "q_default": ".q", "q_force_bg": ".qb", "q_force_ava": ".qa", "q_force_both": ".qm",
+            "fq_default": ".fq", "fq_force_bg": ".fqb", "fq_force_ava": ".fqa", "fq_force_both": ".fqm"
+        }
+        cmd_icons = {
+            "q_default": "menu_select_quote", "q_force_bg": "msg_photos", "q_force_ava": "msg_contacts", "q_force_both": "menu_feature_reactions",
+            "fq_default": "msg_contacts_name", "fq_force_bg": "msg_photos", "fq_force_ava": "msg_contacts", "fq_force_both": "menu_feature_reactions"
+        }
+        
+        stats_list = [Header("Использование команд")]
+        for key, stat_key in cmd_keys.items():
+            cmd_name = self.get_setting(key, cmd_defaults[key])
+            count = self.get_setting(stat_key, 0)
+            icon = cmd_icons.get(key)
+            stats_list.append(Text(text=f"{cmd_name}: использовано {count} раз", icon=icon))
+            
+        return stats_list
+
+    def _confirm_reset_statistics(self, view=None):
+        fragment = get_last_fragment()
+        if not fragment or not fragment.getParentActivity():
+            return
+        activity = fragment.getParentActivity()
+        builder = AlertDialogBuilder(activity)
+        builder.set_title("Сброс статистики")
+        builder.set_message("Вы уверены, что хотите сбросить всю статистику использования? Это действие необратимо.")
+        builder.set_positive_button("Сбросить", self._reset_statistics)
+        builder.set_negative_button("Отмена", lambda b, w: b.dismiss())
+        builder.make_button_red(AlertDialogBuilder.BUTTON_POSITIVE)
+        builder.show()
+
+    def _reset_statistics(self, bld, which):
+        if bld: bld.dismiss()
+        keys_to_reset = [
+            "quotify_stats_total", "quotify_stats_normal", "quotify_stats_fake",
+            "stats_cmd_q", "stats_cmd_qf", "stats_cmd_qc", "stats_cmd_qm",
+            "stats_cmd_fq", "stats_cmd_fqf", "stats_cmd_fqc", "stats_cmd_fqm",
+        ]
+        for key in keys_to_reset:
+            self.set_setting(key, 0)
+        BulletinHelper.show_success("Статистика сброшена")
+        self.refresh_settings()
+        
+    def _increment_stat(self, key):
+        current_value = self.get_setting(key, 0)
+        self.set_setting(key, current_value + 1)
+
+    def _search_google_fonts_and_pick(self, view=None):
+        try:
+            import requests
+        except Exception:
+            BulletinHelper.show_error("Ошибка Google Fonts")
+            return
+        try:
+            from client_utils import get_last_fragment, run_on_ui_thread
+            from ui.alert import AlertDialogBuilder
+        except Exception:
+            pass
+        query = (self.get_setting("gfonts_query", "") or "").strip().lower()
+        api_key = "AIzaSyBZBi89KDR77uodfz4y14M69ZOI9vQwn3E"
+        try:
+            url = f"https://www.googleapis.com/webfonts/v1/webfonts?key={api_key}&sort=popularity"
+            resp = requests.get(url, timeout=20)
+            if resp.status_code != 200:
+                BulletinHelper.show_error("Ошибка Google Fonts")
+                return
+            data = resp.json()
+            items = data.get("items", []) if isinstance(data, dict) else []
+            if query:
+                items = [it for it in items if query in (it.get("family", "").lower())]
+            if not items:
+                BulletinHelper.show_info("Ничего не найдено")
+                return
+            def show_family_picker():
+                try:
+                    from client_utils import get_last_fragment
+                    fragment = get_last_fragment()
+                    ctx = fragment.getParentActivity() if fragment else None
+                    if not ctx:
+                        return
+                    builder = AlertDialogBuilder(ctx, AlertDialogBuilder.ALERT_TYPE_MESSAGE)
+                    builder.set_title("Поиск в Google Fonts")
+                    names = [it.get("family", "?") for it in items]
+                    def on_family(bld, index):
+                        try:
+                            bld.dismiss()
+                            self._pick_gfont_variant(items[index])
+                        except Exception:
+                            pass
+                    builder.set_items(names, on_family)
+                    builder.set_negative_button("OK", lambda d, w: d.dismiss())
+                    builder.show()
+                except Exception:
+                    pass
+            run_on_ui_thread(show_family_picker)
+        except Exception:
+            BulletinHelper.show_error("Ошибка Google Fonts")
+
+    def _pick_gfont_variant(self, item):
+        try:
+            from client_utils import get_last_fragment, run_on_ui_thread
+            from ui.alert import AlertDialogBuilder
+        except Exception:
+            pass
+        try:
+            files = item.get("files", {}) if isinstance(item, dict) else {}
+            candidates = [(variant, url) for variant, url in files.items() if isinstance(url, str) and (url.endswith('.ttf') or url.endswith('.otf'))]
+            if not candidates:
+                BulletinHelper.show_info("Доступны только варианты .ttf/.otf")
+                return
+            def show_variant_picker():
+                try:
+                    fragment = get_last_fragment()
+                    ctx = fragment.getParentActivity() if fragment else None
+                    if not ctx:
+                        return
+                    builder = AlertDialogBuilder(ctx, AlertDialogBuilder.ALERT_TYPE_MESSAGE)
+                    builder.set_title("Поиск в Google Fonts")
+                    items = [v for (v, _) in candidates]
+                    def on_variant(bld, index):
+                        try:
+                            _, url = candidates[index]
+                            self.set_setting("custom_font_url", url)
+                            self.set_setting("font", 4)
+                            BulletinHelper.show_success("Шрифт выбран!")
+                            bld.dismiss()
+                        except Exception:
+                            bld.dismiss()
+                    builder.set_items(items, on_variant)
+                    builder.set_negative_button("OK", lambda d, w: d.dismiss())
+                    builder.show()
+                except Exception:
+                    pass
+            run_on_ui_thread(show_variant_picker)
+        except Exception:
+            BulletinHelper.show_error("Ошибка Google Fonts")
+
+    def _hook_activity_for_picker(self, activity):
+        if self._activity_hook:
+            self._activity_hook.unhook()
+        method = activity.getClass().getDeclaredMethod("onActivityResult", Integer.TYPE, Integer.TYPE, Intent)
+        self._activity_hook = self.hook_method(method, self.ActivityResultHook(self))
+        qlog("Hooked onActivityResult for activity.")
+        
+    def _launch_font_file_picker(self, view=None):
+        try:
+            fragment = get_last_fragment()
+            activity = fragment.getParentActivity() if fragment else None
+            if not activity:
+                BulletinHelper.show_error("Не удалось получить текущий экран!")
+                return
+            self._hook_activity_for_picker(activity)
+            intent = Intent(Intent.ACTION_GET_CONTENT)
+            intent.setType("*/*")
+            intent.addCategory(Intent.CATEGORY_OPENABLE)
+            activity.startActivityForResult(Intent.createChooser(intent, "Выберите файл шрифта"), FILE_PICK_REQUEST_CODE)
+        except Exception as e:
+            qlog(f"Font picker error: {e}")
+            run_on_ui_thread(lambda: BulletinHelper.show_error("Ошибка при открытии выбора файла!"))
+
+    def _open_gallery_for_bg(self, view=None):
+        try:
+            fragment = get_last_fragment()
+            activity = fragment.getParentActivity() if fragment else None
+            if not activity:
+                BulletinHelper.show_error("Не удалось получить текущий экран!")
+                return
+            self._hook_activity_for_picker(activity)
+            intent = Intent(Intent.ACTION_PICK, MediaStore.Images.Media.EXTERNAL_CONTENT_URI)
+            intent.setType("image/*")
+            activity.startActivityForResult(intent, PICK_BG_REQUEST_CODE)
+        except Exception as e:
+            qlog(f"BG picker error: {e}")
+            BulletinHelper.show_error("Не удалось выбрать изображение")
+
+    def _open_gallery_for_avatar(self, view=None):
+        try:
+            fragment = get_last_fragment()
+            activity = fragment.getParentActivity() if fragment else None
+            if not activity:
+                BulletinHelper.show_error("Не удалось получить текущий экран!")
+                return
+            self._hook_activity_for_picker(activity)
+            intent = Intent(Intent.ACTION_PICK, MediaStore.Images.Media.EXTERNAL_CONTENT_URI)
+            intent.setType("image/*")
+            activity.startActivityForResult(intent, PICK_AVA_REQUEST_CODE)
+        except Exception as e:
+            qlog(f"Avatar picker error: {e}")
+            BulletinHelper.show_error("Не удалось выбрать изображение")
+
+    def _clear_custom_bg(self, view=None):
+        try:
+            path = self.get_setting("bg_custom_path", "")
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
+            self.set_setting("bg_use_custom", False)
+            self.set_setting("bg_custom_path", "")
+            BulletinHelper.show_success("Фон сброшен")
+        except Exception:
+            BulletinHelper.show_error("Не удалось выбрать изображение")
+
+    def _clear_custom_avatar(self, view=None):
+        try:
+            path = self.get_setting("avatar_custom_path", "")
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
+            self.set_setting("avatar_use_custom", False)
+            self.set_setting("avatar_custom_path", "")
+            BulletinHelper.show_success("Аватар сброшен")
+        except Exception:
+            BulletinHelper.show_error("Не удалось выбрать изображение")
+
+    def _handle_file_picker_result(self, uri_string: str, file_type: str):
+        input_stream = None
+        output_stream = None
+        try:
+            uri = Uri.parse(uri_string)
+            content_resolver = ApplicationLoader.applicationContext.getContentResolver()
+            file_name = f"{file_type}_{uuid.uuid4()}"
+            cursor = content_resolver.query(uri, None, None, None, None)
+            if cursor is not None:
+                try:
+                    if cursor.moveToFirst() and (idx := cursor.getColumnIndex("_display_name")) != -1:
+                        file_name = cursor.getString(idx)
+                finally:
+                    cursor.close()
+            if file_type == 'font':
+                if not file_name.lower().endswith((".ttf", ".otf")):
+                    run_on_ui_thread(lambda: BulletinHelper.show_error("Файл не является шрифтом (.ttf/.otf)!"))
+                    return
+                target_dir = File(self._temp_dir_path, "fonts")
+                target_file_name = f"custom_{file_name}"
+            else:
+                if not file_name.lower().endswith((".jpg", ".jpeg", ".png")):
+                    file_name = f"{file_name}.jpg"
+                target_dir = File(self._temp_dir_path, "images")
+                target_file_name = f"custom_{file_type}_{uuid.uuid4()}_{file_name}"
+            input_stream = content_resolver.openInputStream(uri)
+            if not input_stream:
+                run_on_ui_thread(lambda: BulletinHelper.show_error("Не удалось открыть файл!"))
+                return
+            if not target_dir.exists():
+                target_dir.mkdirs()
+            target_file = File(target_dir, target_file_name)
+            output_stream = FileOutputStream(target_file)
+            buffer = bytearray(4096)
+            bytes_read = input_stream.read(buffer)
+            while bytes_read != -1:
+                output_stream.write(buffer, 0, bytes_read)
+                bytes_read = input_stream.read(buffer)
+            target_path = target_file.getAbsolutePath()
+            if file_type == 'font':
+                self.set_setting("custom_font_path", target_path)
+                run_on_ui_thread(lambda: BulletinHelper.show_success(f"Шрифт '{file_name}' успешно загружен!"))
+            elif file_type == 'bg':
+                self.set_setting("bg_custom_path", target_path)
+                self.set_setting("bg_use_custom", True)
+                run_on_ui_thread(lambda: BulletinHelper.show_success("Фон обновлён"))
+            elif file_type == 'avatar':
+                self.set_setting("avatar_custom_path", target_path)
+                run_on_ui_thread(lambda: BulletinHelper.show_success("Аватар обновлён"))
+            self.refresh_settings()
+        except Exception as e:
+            qlog(f"File handle error ({file_type}): {e}")
+            run_on_ui_thread(lambda: BulletinHelper.show_error("Ошибка при обработке файла!"))
+        finally:
+            if input_stream:
+                try:
+                    input_stream.close()
+                except Exception:
+                    pass
+            if output_stream:
+                try:
+                    output_stream.close()
+                except Exception:
+                    pass
+
+    def refresh_settings(self, *args):
+        fragment = get_last_fragment()
+        if fragment and hasattr(fragment, "rebuildAllFragments"):
+             run_on_ui_thread(lambda: fragment.rebuildAllFragments(True))
+
+    def get_attach_label(self, t):
+        default_key = f"ATTACH_TYPE_{t}"
+        default_label = LocalizationManager.get_string(default_key)
+        if default_label == default_key:
+            fallback_label = self.get_setting("attach_label_none", "[вложение]")
+            return self.get_setting(f"attach_label_{t}", fallback_label)
+        return self.get_setting(f"attach_label_{t}", default_label)
+
+    def on_send_message_hook(self, account, params) -> HookStrategy:
+        if not isinstance(params.message, str):
+            return HookResult()
+        message_text = params.message.strip()
+        font_index = self.get_setting("font", 0)
+        layout_index = self.get_setting("layout", 1)
+        fixed_width = self.get_setting("fixed_width", True)
+        custom_bg_path = self.get_setting("bg_custom_path", "")
+        custom_avatar_path = self.get_setting("avatar_custom_path", "")
+        is_bg_forced_by_setting = self.get_setting("bg_use_custom", False)
+        
+        q_cmd = self.get_setting("q_default", ".q").strip().lower()
+        qf_cmd = self.get_setting("q_force_bg", ".qb").strip().lower()
+        qc_cmd = self.get_setting("q_force_ava", ".qa").strip().lower()
+        qm_cmd = self.get_setting("q_force_both", ".qm").strip().lower()
+        
+        parts_all = message_text.split(" ", 1)
+        cmd_token = parts_all[0].lower()
+        rest_after_cmd = parts_all[1].strip() if len(parts_all) > 1 else ""
+
+        is_quote = False
+        force_bg = is_bg_forced_by_setting
+        force_av = False
+        override_author = None
+        
+        if cmd_token == q_cmd:
+            is_quote = True
+            override_author = rest_after_cmd
+        elif cmd_token == qf_cmd:
+            is_quote = True
+            force_bg = True
+            override_author = rest_after_cmd
+        elif cmd_token == qc_cmd:
+            is_quote = True
+            force_av = True
+            override_author = rest_after_cmd
+        elif cmd_token == qm_cmd:
+            is_quote = True
+            force_bg = True
+            force_av = True
+            override_author = rest_after_cmd
+        
+        if is_quote:
+            try:
+                if params.replyToMsg is None:
+                    BulletinHelper.show_error("⚠️ Ты забыл реплайнуть сообщение!")
+                    return HookResult(strategy=HookStrategy.CANCEL)
+                self._increment_stat("quotify_stats_total")
+                self._increment_stat("quotify_stats_normal")
+                if cmd_token == q_cmd: self._increment_stat("stats_cmd_q")
+                elif cmd_token == qf_cmd: self._increment_stat("stats_cmd_qf")
+                elif cmd_token == qc_cmd: self._increment_stat("stats_cmd_qc")
+                elif cmd_token == qm_cmd: self._increment_stat("stats_cmd_qm")
+                
+                quote = QuoteManager(params, font_index, layout_index, fixed_width, self, custom_bg_path, custom_avatar_path, force_bg, force_av, search_query=override_author)
+                quote.generate_quote()
+                return HookResult(strategy=HookStrategy.CANCEL)
+            except Exception as e:
+                qlog(f"Quote error: {e}")
+                BulletinHelper.show_error("⛔ Произошла ошибка в коде плагина")
+                return HookResult(strategy=HookStrategy.CANCEL)
+
+        fq_cmd = self.get_setting("fq_default", ".fq").strip().lower()
+        fqf_cmd = self.get_setting("fq_force_bg", ".fqb").strip().lower()
+        fqc_cmd = self.get_setting("fq_force_ava", ".fqa").strip().lower()
+        fqm_cmd = self.get_setting("fq_force_both", ".fqm").strip().lower()
+
+        is_fake = False
+        force_bg_fake = is_bg_forced_by_setting
+        force_av_fake = False
+
+        if cmd_token == fq_cmd:
+            is_fake = True
+        elif cmd_token == fqf_cmd:
+            is_fake = True
+            force_bg_fake = True
+        elif cmd_token == fqc_cmd:
+            is_fake = True
+            force_av_fake = True
+        elif cmd_token == fqm_cmd:
+            is_fake = True
+            force_bg_fake = True
+            force_av_fake = True
+
+        if is_fake:
+            fake_text = rest_after_cmd
+            if not fake_text:
+                BulletinHelper.show_error("⚠️ Укажи текст после команды")
+                return HookResult(strategy=HookStrategy.CANCEL)
+                
+            sep = self.get_setting("fake_name_separator", DEFAULT_FAKE_NAME_SEPARATOR)
+                
+            override_author = None
+            search_query = None
+
+            if sep and sep in fake_text:
+                text_part, name_part = fake_text.rsplit(sep, 1)
+                fake_text = text_part.strip()
+                search_query = name_part.strip()
+                    
+            try:
+
+                self._increment_stat("quotify_stats_total")
+                self._increment_stat("quotify_stats_fake")
+                if cmd_token == fq_cmd: self._increment_stat("stats_cmd_fq")
+                elif cmd_token == fqf_cmd: self._increment_stat("stats_cmd_fqf")
+                elif cmd_token == fqc_cmd: self._increment_stat("stats_cmd_fqc")
+                elif cmd_token == fqm_cmd: self._increment_stat("stats_cmd_fqm")
+
+                quote = QuoteManager(params, font_index, layout_index, fixed_width, self, custom_bg_path, custom_avatar_path, force_bg_fake, force_av_fake, override_author_name=override_author, search_query=search_query)
+                quote.generate_fake_quote(fake_text)
+                return HookResult(strategy=HookStrategy.CANCEL)
+            except Exception as e:
+                qlog(f"Fake quote error: {e}")
+                BulletinHelper.show_error("⛔ Произошла ошибка в коде плагина")
+                return HookResult(strategy=HookStrategy.CANCEL)
+        
+        return HookResult()
+
+plugin_instance = QuotifyForkPlugin()
